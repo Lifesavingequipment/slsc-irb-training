@@ -1,3 +1,4 @@
+{/* Auto-deploy test */}
 import { useEffect, useState } from 'react'
 import { Calendar, Users, Wrench, AlertTriangle, ChevronRight, CheckCircle, XCircle, Clock3, Award, TrendingUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
