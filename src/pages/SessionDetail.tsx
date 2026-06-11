@@ -18,6 +18,7 @@ import {
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import type { IrbSession, IrbLocation, Member, Qualification, IrbSessionRsvp } from '../types'
+import { WaveTeamDraw } from '../components/WaveTeamDraw'
 
 const SESSION_TYPE_LABELS: Record<string, string> = {
   training: 'Training',
@@ -58,7 +59,7 @@ interface RsvpWithMember extends IrbSessionRsvp {
 export function SessionDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const { member: currentMember } = useAuth()
+  const { member: currentMember, club } = useAuth()
 
   const [session, setSession] = useState<IrbSession | null>(null)
   const [location, setLocation] = useState<IrbLocation | null>(null)
@@ -512,26 +513,30 @@ export function SessionDetail() {
             </button>
           ))}
         </div>
-        <div className="p-8 text-center">
-          {bottomTab === 'attendance' && (
-            <>
-              <Users size={36} className="text-gray-200 mx-auto mb-3" />
-              <p className="text-gray-400 text-sm">Mark attendance — available when session is active or complete.</p>
-            </>
-          )}
-          {bottomTab === 'team_draw' && (
-            <>
-              <Users size={36} className="text-gray-200 mx-auto mb-3" />
-              <p className="text-gray-400 text-sm">Wave draw — coming soon.</p>
-            </>
-          )}
-          {bottomTab === 'training_plan' && (
-            <>
-              <FileText size={36} className="text-gray-200 mx-auto mb-3" />
-              <p className="text-gray-400 text-sm">Training plan — coming soon.</p>
-            </>
-          )}
-        </div>
+        {bottomTab === 'attendance' && (
+          <div className="p-8 text-center">
+            <Users size={36} className="text-gray-200 mx-auto mb-3" />
+            <p className="text-gray-400 text-sm">Mark attendance — available when session is active or complete.</p>
+          </div>
+        )}
+        {bottomTab === 'team_draw' && (
+          <div className="p-6">
+            <WaveTeamDraw
+              sessionId={session.id}
+              clubId={session.club_id}
+              clubName={club?.club_name ?? ''}
+              sessionTitle={session.title}
+              sessionDate={session.scheduled_date}
+              attendingMemberIds={new Set(attending.map(r => r.member_id))}
+            />
+          </div>
+        )}
+        {bottomTab === 'training_plan' && (
+          <div className="p-8 text-center">
+            <FileText size={36} className="text-gray-200 mx-auto mb-3" />
+            <p className="text-gray-400 text-sm">Training plan — coming soon.</p>
+          </div>
+        )}
       </div>
     </div>
   )

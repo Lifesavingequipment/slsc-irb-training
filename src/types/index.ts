@@ -85,6 +85,7 @@ export interface IrbSessionTeam {
   driver_id: string | null
   crew_id: string | null
   patient_id: string | null
+  notes: string | null
 }
 
 export interface IrbAttendance {
