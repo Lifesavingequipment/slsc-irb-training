@@ -19,6 +19,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 import type { IrbSession, IrbLocation, Member, Qualification, IrbSessionRsvp } from '../types'
 import { WaveTeamDraw } from '../components/WaveTeamDraw'
+import { AttendanceTab } from '../components/AttendanceTab'
 
 const SESSION_TYPE_LABELS: Record<string, string> = {
   training: 'Training',
@@ -513,11 +514,14 @@ export function SessionDetail() {
             </button>
           ))}
         </div>
-        {bottomTab === 'attendance' && (
-          <div className="p-8 text-center">
-            <Users size={36} className="text-gray-200 mx-auto mb-3" />
-            <p className="text-gray-400 text-sm">Mark attendance — available when session is active or complete.</p>
-          </div>
+        {bottomTab === 'attendance' && currentMember && (
+          <AttendanceTab
+            sessionId={session.id}
+            clubId={session.club_id}
+            sessionStatus={session.status}
+            currentMemberId={currentMember.id}
+            rsvps={rsvps}
+          />
         )}
         {bottomTab === 'team_draw' && (
           <div className="p-6">
