@@ -37,7 +37,6 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
   const [records, setRecords] = useState<AttendanceRecord[]>([])
   const [allMembers, setAllMembers] = useState<MemberOption[]>([])
   const [isTrainer, setIsTrainer] = useState(false)
-  const [debugRoles, setDebugRoles] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [preloading, setPreloading] = useState(false)
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
@@ -93,7 +92,6 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
     const trainerCheck = roleNames.includes('irb_trainer') || roleNames.includes('club_admin')
     console.log('[AttendanceTab] roles:', roleNames, '| isTrainer:', trainerCheck)
     setIsTrainer(trainerCheck)
-    setDebugRoles(roleNames)
 
     const memberMap = new Map<string, MemberOption>()
     for (const m of (membersRes.data ?? [])) {
@@ -262,11 +260,6 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
 
   return (
     <div className="p-6 space-y-6">
-
-      {/* ── Temporary role debug banner ── */}
-      <div className="text-xs bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-yellow-800 font-mono">
-        Debug: roles = [{debugRoles.join(', ')}] | isTrainer = {String(isTrainer)}
-      </div>
 
       {/* ── Quick mark section (trainer only) ── */}
       {isTrainer && (
