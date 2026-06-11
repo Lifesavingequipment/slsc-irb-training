@@ -107,6 +107,25 @@ export interface IrbEquipment {
   name: string
   identifier: string | null
   status: string
+  purchase_date: string | null
+  last_service_date: string | null
+  next_service_date: string | null
+  notes: string | null
+  is_active: boolean
+}
+
+export interface IrbEquipmentFault {
+  id: string
+  club_id: string
+  equipment_id: string
+  reported_by: string
+  fault_description: string
+  severity: string
+  status: string
+  reported_at: string
+  resolved_at: string | null
+  resolved_by: string | null
+  resolution_notes: string | null
 }
 
 export interface IrbLocation {

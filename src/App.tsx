@@ -9,6 +9,7 @@ import { SessionDetail } from './pages/SessionDetail'
 import { SessionForm } from './pages/SessionForm'
 import { Members } from './pages/Members'
 import { Equipment } from './pages/Equipment'
+import { EquipmentDetail } from './pages/EquipmentDetail'
 import { Locations } from './pages/Locations'
 import { Settings } from './pages/Settings'
 
@@ -34,6 +35,7 @@ export default function App() {
             <Route path="sessions/:id/edit" element={<SessionForm />} />
             <Route path="members" element={<Members />} />
             <Route path="equipment" element={<Equipment />} />
+            <Route path="equipment/:id" element={<EquipmentDetail />} />
             <Route path="locations" element={<Locations />} />
             <Route path="settings" element={<Settings />} />
           </Route>
