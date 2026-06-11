@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef } from 'react'
-import { Plus, Trash2, Star, CheckCircle, Search, Users } from 'lucide-react'
+import { useEffect, useState, useRef, useMemo } from 'react'
+import { Trash2, Star, CheckCircle, Search, Users, UserCheck } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import type { IrbSessionRsvp } from '../types'
 
@@ -41,11 +41,20 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
   const [preloading, setPreloading] = useState(false)
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set())
-  const [showAddSearch, setShowAddSearch] = useState(false)
-  const [addSearch, setAddSearch] = useState('')
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null)
   const [confirmSignOff, setConfirmSignOff] = useState(false)
   const [signingOff, setSigningOff] = useState(false)
+
+  // Quick mark state
+  const [quickSearch, setQuickSearch] = useState('')
+  const [quickMemberId, setQuickMemberId] = useState('')
+  const [quickDropdownOpen, setQuickDropdownOpen] = useState(false)
+  const [quickMarking, setQuickMarking] = useState(false)
+  const quickRef = useRef<HTMLDivElement>(null)
+
+  // Track which records haven't been explicitly marked yet
+  // (initialised from DB: all attended=false records start as "not yet marked")
+  const [unmarkedIds, setUnmarkedIds] = useState<Set<string>>(new Set())
 
   const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const recordsRef = useRef<AttendanceRecord[]>([])
@@ -59,6 +68,17 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
   useEffect(() => {
     loadData()
   }, [sessionId, clubId, currentMemberId])
+
+  // Close quick-search dropdown on outside click
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (quickRef.current && !quickRef.current.contains(e.target as Node)) {
+        setQuickDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [])
 
   async function loadData() {
     setLoading(true)
@@ -86,8 +106,19 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
       initials: memberMap.get(a.member_id)?.initials ?? '?',
     }))
     setRecords(recs)
+
+    // All attended=false records start as "not yet marked" until trainer acts
+    setUnmarkedIds(new Set(recs.filter(r => !r.attended).map(r => r.id)))
+
     setLoading(false)
   }
+
+  // RSVP lookup by member id
+  const rsvpMap = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const r of rsvps) map.set(r.member_id, r.rsvp_status)
+    return map
+  }, [rsvps])
 
   async function preloadFromRsvps() {
     setPreloading(true)
@@ -111,7 +142,51 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
     setPreloading(false)
   }
 
+  // Quick mark: add a member with an explicit present/absent value
+  async function quickMark(attended: boolean) {
+    if (!quickMemberId) return
+    const member = allMembers.find(m => m.id === quickMemberId)
+    if (!member) return
+
+    setQuickMarking(true)
+    const { data } = await supabase
+      .from('irb_attendance')
+      .insert({
+        club_id: clubId,
+        session_id: sessionId,
+        member_id: quickMemberId,
+        attended,
+        signed_off: false,
+      })
+      .select()
+      .single()
+
+    if (data) {
+      const newRec: AttendanceRecord = {
+        ...data,
+        memberName: member.name,
+        initials: member.initials,
+      }
+      setRecords(prev => [...prev, newRec])
+      // Explicitly marked — do NOT add to unmarkedIds
+    }
+
+    setQuickMemberId('')
+    setQuickSearch('')
+    setQuickDropdownOpen(false)
+    setQuickMarking(false)
+  }
+
+  function markExplicit(id: string) {
+    setUnmarkedIds(prev => {
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
+  }
+
   function updateRecord(id: string, field: string, value: unknown) {
+    if (field === 'attended') markExplicit(id)
     setRecords(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r))
 
     const existing = debounceTimers.current.get(id)
@@ -139,28 +214,10 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
     setTimeout(() => setSavedIds(prev => { const s = new Set(prev); s.delete(rec.id); return s }), 2000)
   }
 
-  async function addMember(memberId: string) {
-    const member = allMembers.find(m => m.id === memberId)
-    if (!member) return
-    setShowAddSearch(false)
-    setAddSearch('')
-
-    const { data } = await supabase.from('irb_attendance').insert({
-      club_id: clubId,
-      session_id: sessionId,
-      member_id: memberId,
-      attended: false,
-      signed_off: false,
-    }).select().single()
-
-    if (data) {
-      setRecords(prev => [...prev, { ...data, memberName: member.name, initials: member.initials }])
-    }
-  }
-
   async function removeRecord(id: string) {
     await supabase.from('irb_attendance').delete().eq('id', id)
     setRecords(prev => prev.filter(r => r.id !== id))
+    setUnmarkedIds(prev => { const s = new Set(prev); s.delete(id); return s })
     setConfirmRemoveId(null)
   }
 
@@ -176,14 +233,20 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
   }
 
   const visibleRecords = isTrainer ? records : records.filter(r => r.member_id === currentMemberId)
-  const attendedCount = records.filter(r => r.attended).length
-  const absentCount = records.filter(r => !r.attended).length
+  const presentCount = records.filter(r => r.attended).length
+  const absentCount = records.filter(r => !r.attended && !unmarkedIds.has(r.id)).length
+  const unmarkedCount = records.filter(r => !r.attended && unmarkedIds.has(r.id)).length
   const signedOffCount = records.filter(r => r.signed_off).length
 
   const existingMemberIds = new Set(records.map(r => r.member_id))
-  const availableToAdd = allMembers.filter(
-    m => !existingMemberIds.has(m.id) && m.name.toLowerCase().includes(addSearch.toLowerCase())
+
+  // Members available for quick mark (not already in list)
+  const quickOptions = allMembers.filter(
+    m => !existingMemberIds.has(m.id) &&
+      (quickSearch === '' || m.name.toLowerCase().includes(quickSearch.toLowerCase()))
   )
+
+  const selectedQuickMember = allMembers.find(m => m.id === quickMemberId)
 
   if (loading) {
     return (
@@ -194,126 +257,186 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
   }
 
   return (
-    <div className="p-6">
-      {/* Status banner */}
-      {!isActive && (
-        <div className="mb-5 p-4 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-          Attendance can be marked once the session is active or complete. You can pre-load the expected attendees below.
+    <div className="p-6 space-y-6">
+
+      {/* ── Quick mark section (trainer only) ── */}
+      {isTrainer && (
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+          <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+            <UserCheck size={13} />
+            Mark Attendance
+          </h3>
+          <div className="flex flex-col sm:flex-row gap-3">
+            {/* Searchable member picker */}
+            <div ref={quickRef} className="relative flex-1">
+              <div className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-xl focus-within:border-gray-400 transition">
+                <Search size={15} className="text-gray-400 flex-shrink-0" />
+                <input
+                  type="text"
+                  placeholder="Find a member…"
+                  value={quickSearch}
+                  onChange={e => {
+                    setQuickSearch(e.target.value)
+                    setQuickMemberId('')
+                    setQuickDropdownOpen(true)
+                  }}
+                  onFocus={() => setQuickDropdownOpen(true)}
+                  className="flex-1 text-sm bg-transparent outline-none text-gray-900 placeholder-gray-400 min-w-0"
+                />
+                {(quickSearch || quickMemberId) && (
+                  <button
+                    onClick={() => { setQuickSearch(''); setQuickMemberId(''); setQuickDropdownOpen(false) }}
+                    className="text-gray-300 hover:text-gray-500 transition text-lg leading-none"
+                  >
+                    ×
+                  </button>
+                )}
+              </div>
+
+              {quickDropdownOpen && quickSearch.length > 0 && (
+                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden max-h-56 overflow-y-auto">
+                  {quickOptions.length === 0 ? (
+                    <div className="px-4 py-3 text-sm text-gray-400">
+                      {existingMemberIds.size > 0 && allMembers.some(m => m.name.toLowerCase().includes(quickSearch.toLowerCase()) && existingMemberIds.has(m.id))
+                        ? 'Already in attendance list'
+                        : 'No members found'}
+                    </div>
+                  ) : (
+                    quickOptions.map(m => (
+                      <button
+                        key={m.id}
+                        onMouseDown={e => e.preventDefault()}
+                        onClick={() => {
+                          setQuickMemberId(m.id)
+                          setQuickSearch(m.name)
+                          setQuickDropdownOpen(false)
+                        }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left hover:bg-gray-50 transition"
+                      >
+                        <span className="w-8 h-8 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center flex-shrink-0">
+                          {m.initials}
+                        </span>
+                        <span className="text-gray-800">{m.name}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Present / Absent buttons */}
+            <div className="flex gap-2 sm:flex-shrink-0">
+              <button
+                onClick={() => quickMark(true)}
+                disabled={!quickMemberId || quickMarking}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-emerald-500 text-white text-sm font-semibold rounded-xl hover:bg-emerald-600 transition disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px]"
+              >
+                {quickMarking ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  'Present'
+                )}
+              </button>
+              <button
+                onClick={() => quickMark(false)}
+                disabled={!quickMemberId || quickMarking}
+                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-gray-200 text-gray-700 text-sm font-semibold rounded-xl hover:bg-gray-300 transition disabled:opacity-40 disabled:cursor-not-allowed min-h-[44px]"
+              >
+                Absent
+              </button>
+            </div>
+          </div>
+
+          {selectedQuickMember && (
+            <p className="mt-2 text-xs text-gray-400">
+              Ready to mark <span className="font-semibold text-gray-600">{selectedQuickMember.name}</span> — tap Present or Absent
+            </p>
+          )}
         </div>
       )}
 
-      {/* Action bar */}
-      <div className="flex items-center gap-3 mb-5 flex-wrap">
-        <button
-          onClick={preloadFromRsvps}
-          disabled={preloading}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
-        >
-          {preloading
-            ? <span className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
-            : <Users size={15} />
-          }
-          Pre-load from RSVPs
-        </button>
+      {/* ── Pre-load from RSVPs ── */}
+      {isTrainer && (
+        <div className="flex items-center gap-3 flex-wrap">
+          <button
+            onClick={preloadFromRsvps}
+            disabled={preloading}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium border border-gray-200 rounded-lg text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+          >
+            {preloading
+              ? <span className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin" />
+              : <Users size={15} />
+            }
+            Pre-load from RSVPs
+          </button>
+        </div>
+      )}
 
-        {(isTrainer || isActive) && (
-          <div className="relative">
-            <button
-              onClick={() => setShowAddSearch(v => !v)}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium bg-primary text-white rounded-lg hover:bg-primary/90 transition"
-            >
-              <Plus size={15} /> Add Member
-            </button>
-
-            {showAddSearch && (
-              <div className="absolute top-full left-0 mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-10">
-                <div className="p-2 border-b border-gray-100">
-                  <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-50 rounded-md">
-                    <Search size={14} className="text-gray-400 flex-shrink-0" />
-                    <input
-                      autoFocus
-                      type="text"
-                      placeholder="Search members..."
-                      value={addSearch}
-                      onChange={e => setAddSearch(e.target.value)}
-                      className="bg-transparent text-sm outline-none flex-1 min-w-0"
-                    />
-                  </div>
-                </div>
-                <div className="max-h-48 overflow-y-auto">
-                  {availableToAdd.length === 0 ? (
-                    <div className="p-3 text-sm text-gray-400 text-center">No members found</div>
-                  ) : availableToAdd.map(m => (
-                    <button
-                      key={m.id}
-                      onClick={() => addMember(m.id)}
-                      className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
-                    >
-                      <span className="w-7 h-7 rounded-full bg-primary/10 text-primary text-xs font-semibold flex items-center justify-center flex-shrink-0">
-                        {m.initials}
-                      </span>
-                      {m.name}
-                    </button>
-                  ))}
-                </div>
-                <div className="p-2 border-t border-gray-100">
-                  <button
-                    onClick={() => { setShowAddSearch(false); setAddSearch('') }}
-                    className="w-full text-xs text-gray-400 hover:text-gray-600 py-1"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
+      {/* ── Attendance list ── */}
       {visibleRecords.length === 0 ? (
         <div className="text-center py-10">
           <Users size={36} className="text-gray-200 mx-auto mb-3" />
-          <p className="text-gray-400 text-sm">No attendance records yet. Pre-load from RSVPs or add members manually.</p>
+          <p className="text-gray-400 text-sm">
+            No attendance records yet.{' '}
+            {isTrainer ? 'Use "Mark Attendance" above to add members, or pre-load from RSVPs.' : ''}
+          </p>
         </div>
       ) : (
         <>
-          {/* Summary bar — trainer view only */}
+          {/* Summary bar */}
           {isTrainer && (
-            <div className="flex overflow-x-auto gap-5 mb-5 p-4 bg-gray-50 rounded-lg border border-gray-100">
-              <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap gap-4 px-4 py-3 bg-white border border-gray-200 rounded-xl">
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-gray-200" />
                 <span className="text-sm text-gray-500">Total</span>
                 <span className="text-sm font-bold text-gray-900">{records.length}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400" />
-                <span className="text-sm text-gray-500">Attended</span>
-                <span className="text-sm font-bold text-emerald-600">{attendedCount}</span>
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                <span className="text-sm text-gray-500">Present</span>
+                <span className="text-sm font-bold text-emerald-600">{presentCount}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-gray-300" />
+              <div className="flex items-center gap-2">
+                <span className="w-2.5 h-2.5 rounded-full bg-gray-400" />
                 <span className="text-sm text-gray-500">Absent</span>
-                <span className="text-sm font-bold text-gray-500">{absentCount}</span>
+                <span className="text-sm font-bold text-gray-600">{absentCount}</span>
               </div>
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-blue-400" />
-                <span className="text-sm text-gray-500">Signed off</span>
-                <span className="text-sm font-bold text-blue-600">{signedOffCount}</span>
-              </div>
+              {unmarkedCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+                  <span className="text-sm text-gray-500">Not yet marked</span>
+                  <span className="text-sm font-bold text-amber-600">{unmarkedCount}</span>
+                </div>
+              )}
+              {signedOffCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400" />
+                  <span className="text-sm text-gray-500">Signed off</span>
+                  <span className="text-sm font-bold text-blue-600">{signedOffCount}</span>
+                </div>
+              )}
             </div>
           )}
 
           {/* Attendance rows */}
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {visibleRecords.map(rec => {
               const canEdit = isTrainer || rec.member_id === currentMemberId
               const isSaving = savingIds.has(rec.id)
               const isSaved = savedIds.has(rec.id)
+              const isUnmarked = unmarkedIds.has(rec.id)
+              const rsvpStatus = rsvpMap.get(rec.member_id)
+
+              // Row left-border style based on state
+              let rowClass = 'border-gray-200 bg-white border-l-4 border-l-gray-200'
+              if (rec.attended) {
+                rowClass = 'border-gray-200 bg-emerald-50/50 border-l-4 border-l-emerald-400'
+              } else if (!isUnmarked) {
+                rowClass = 'border-gray-200 bg-white border-l-4 border-l-gray-400'
+              }
 
               return (
-                <div
-                  key={rec.id}
-                  className={`border rounded-xl p-4 transition ${rec.attended ? 'border-emerald-200 bg-emerald-50/40' : 'border-gray-200 bg-white'}`}
-                >
+                <div key={rec.id} className={`rounded-xl border p-4 transition ${rowClass}`}>
                   <div className="flex items-start gap-3">
                     {/* Avatar */}
                     <div className="w-9 h-9 rounded-full bg-primary/10 text-primary text-sm font-semibold flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -324,39 +447,68 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
                       {/* Name row */}
                       <div className="flex items-center justify-between mb-3 gap-2">
                         <div className="flex items-center gap-2 flex-wrap min-w-0">
-                          <span className="font-medium text-gray-900 text-sm">{rec.memberName}</span>
+                          <span className="font-semibold text-gray-900 text-sm">{rec.memberName}</span>
+
+                          {/* RSVP badge */}
+                          {rsvpStatus === 'attending' && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-emerald-100 text-emerald-700 rounded-full font-medium">Going</span>
+                          )}
+                          {rsvpStatus === 'not_attending' && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-red-100 text-red-600 rounded-full font-medium">Not Going</span>
+                          )}
+                          {!rsvpStatus && (
+                            <span className="text-[10px] px-1.5 py-0.5 bg-gray-100 text-gray-400 rounded-full font-medium">No RSVP</span>
+                          )}
+
                           {isSaving && <span className="text-xs text-gray-400 animate-pulse">Saving…</span>}
                           {isSaved && !isSaving && <span className="text-xs text-emerald-500 font-medium">Saved</span>}
                           {rec.signed_off && (
-                            <span className="text-xs px-2 py-0.5 bg-blue-100 text-blue-600 rounded-full font-medium">Signed off</span>
+                            <span className="text-[10px] px-1.5 py-0.5 bg-blue-100 text-blue-600 rounded-full font-medium">Signed off</span>
                           )}
                         </div>
                         {isTrainer && (
                           <button
                             onClick={() => setConfirmRemoveId(rec.id)}
-                            className="text-gray-300 hover:text-red-400 transition flex-shrink-0"
+                            className="text-gray-300 hover:text-red-400 transition flex-shrink-0 p-1"
                           >
-                            <Trash2 size={15} />
+                            <Trash2 size={14} />
                           </button>
                         )}
                       </div>
 
-                      {/* Fields */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
-                        {/* Attended toggle */}
-                        <div>
-                          <label className="text-xs text-gray-400 mb-1.5 block">Attended</label>
-                          <div className="flex items-center min-h-[44px]">
+                      {/* Attended toggle — prominent Present/Absent segmented control */}
+                      {canEdit && (
+                        <div className="mb-3">
+                          <div className="flex rounded-lg overflow-hidden border border-gray-200 w-fit min-h-[44px]">
                             <button
-                              disabled={!canEdit || (!isActive && !isTrainer)}
-                              onClick={() => canEdit && updateRecord(rec.id, 'attended', !rec.attended)}
-                              className={`relative flex items-center w-14 h-8 rounded-full transition-colors ${rec.attended ? 'bg-emerald-500' : 'bg-gray-200'} ${!canEdit ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                              onClick={() => updateRecord(rec.id, 'attended', true)}
+                              disabled={!isActive && !isTrainer}
+                              className={`px-5 py-2 text-sm font-semibold transition min-h-[44px] ${
+                                rec.attended
+                                  ? 'bg-emerald-500 text-white'
+                                  : 'bg-white text-gray-400 hover:bg-gray-50'
+                              } disabled:opacity-40 disabled:cursor-not-allowed`}
                             >
-                              <span className={`absolute w-6 h-6 rounded-full bg-white shadow-sm transition-transform ${rec.attended ? 'translate-x-7' : 'translate-x-1'}`} />
+                              Present
+                            </button>
+                            <div className="w-px bg-gray-200" />
+                            <button
+                              onClick={() => updateRecord(rec.id, 'attended', false)}
+                              disabled={!isActive && !isTrainer}
+                              className={`px-5 py-2 text-sm font-semibold transition min-h-[44px] ${
+                                !rec.attended && !isUnmarked
+                                  ? 'bg-gray-500 text-white'
+                                  : 'bg-white text-gray-400 hover:bg-gray-50'
+                              } disabled:opacity-40 disabled:cursor-not-allowed`}
+                            >
+                              Absent
                             </button>
                           </div>
                         </div>
+                      )}
 
+                      {/* Detail fields */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 items-end">
                         {/* Role on day */}
                         <div>
                           <label className="text-xs text-gray-400 mb-1 block">Role on day</label>
@@ -447,7 +599,7 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
 
           {/* Sign off all */}
           {isTrainer && isActive && records.some(r => r.attended && !r.signed_off) && (
-            <div className="mt-6 pt-5 border-t border-gray-100">
+            <div className="pt-5 border-t border-gray-100">
               <button
                 onClick={() => setConfirmSignOff(true)}
                 className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 transition"
