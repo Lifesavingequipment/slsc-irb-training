@@ -5,6 +5,8 @@ import { Layout } from './components/Layout'
 import { Login } from './pages/Login'
 import { Dashboard } from './pages/Dashboard'
 import { Sessions } from './pages/Sessions'
+import { SessionDetail } from './pages/SessionDetail'
+import { SessionForm } from './pages/SessionForm'
 import { Members } from './pages/Members'
 import { Equipment } from './pages/Equipment'
 import { Locations } from './pages/Locations'
@@ -27,6 +29,9 @@ export default function App() {
           <Route element={<ProtectedLayout />}>
             <Route index element={<Dashboard />} />
             <Route path="sessions" element={<Sessions />} />
+            <Route path="sessions/new" element={<SessionForm />} />
+            <Route path="sessions/:id" element={<SessionDetail />} />
+            <Route path="sessions/:id/edit" element={<SessionForm />} />
             <Route path="members" element={<Members />} />
             <Route path="equipment" element={<Equipment />} />
             <Route path="locations" element={<Locations />} />

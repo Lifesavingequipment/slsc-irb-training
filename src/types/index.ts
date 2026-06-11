@@ -53,10 +53,17 @@ export interface IrbSession {
   location_id: string | null
   lead_trainer_id: string | null
   max_participants: number | null
+  min_drivers: number | null
+  min_crew: number | null
   status: string
   weather_conditions: string | null
   sea_conditions: string | null
+  wind_speed: string | null
+  tide_info: string | null
+  qualification_id: string | null
   notes: string | null
+  debrief_notes: string | null
+  created_by: string | null
 }
 
 export interface IrbSessionRsvp {
