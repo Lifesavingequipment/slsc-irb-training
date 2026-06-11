@@ -37,6 +37,7 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
   const [records, setRecords] = useState<AttendanceRecord[]>([])
   const [allMembers, setAllMembers] = useState<MemberOption[]>([])
   const [isTrainer, setIsTrainer] = useState(false)
+  const [debugRoles, setDebugRoles] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [preloading, setPreloading] = useState(false)
   const [savingIds, setSavingIds] = useState<Set<string>>(new Set())
@@ -85,13 +86,14 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
     const [attendanceRes, membersRes, rolesRes] = await Promise.all([
       supabase.from('irb_attendance').select('*').eq('session_id', sessionId).eq('club_id', clubId),
       supabase.from('members').select('id, first_name, last_name, preferred_name').eq('club_id', clubId).order('last_name'),
-      supabase.from('member_roles').select('role_name').eq('member_id', currentMemberId).eq('is_active', true),
+      supabase.from('roles').select('role_name').eq('member_id', currentMemberId).eq('is_active', true),
     ])
 
     const roleNames = (rolesRes.data ?? []).map((r: { role_name: string }) => r.role_name)
     const trainerCheck = roleNames.includes('irb_trainer') || roleNames.includes('club_admin')
     console.log('[AttendanceTab] roles:', roleNames, '| isTrainer:', trainerCheck)
     setIsTrainer(trainerCheck)
+    setDebugRoles(roleNames)
 
     const memberMap = new Map<string, MemberOption>()
     for (const m of (membersRes.data ?? [])) {
@@ -260,6 +262,11 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
 
   return (
     <div className="p-6 space-y-6">
+
+      {/* ── Temporary role debug banner ── */}
+      <div className="text-xs bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2 text-yellow-800 font-mono">
+        Debug: roles = [{debugRoles.join(', ')}] | isTrainer = {String(isTrainer)}
+      </div>
 
       {/* ── Quick mark section (trainer only) ── */}
       {isTrainer && (
