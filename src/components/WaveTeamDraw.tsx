@@ -435,26 +435,8 @@ export function WaveTeamDraw({
 
   return (
     <>
-      <style>{`
-        @media print {
-          body * { visibility: hidden !important; }
-          .wave-print-view, .wave-print-view * { visibility: visible !important; }
-          .wave-print-view {
-            position: fixed !important;
-            inset: 0 !important;
-            background: white !important;
-            padding: 24px !important;
-            z-index: 9999 !important;
-          }
-          .wave-no-print { display: none !important; }
-        }
-        @media screen {
-          .wave-print-view { display: none; }
-        }
-      `}</style>
-
       {/* ── Screen UI ── */}
-      <div className="wave-no-print space-y-7">
+      <div className="print:hidden space-y-7">
 
         {/* Header bar */}
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -870,7 +852,7 @@ export function WaveTeamDraw({
       )}
 
       {/* ── Print view ── */}
-      <div className="wave-print-view">
+      <div className="hidden print:block print:fixed print:inset-0 print:bg-white print:p-6 print:z-[9999]">
         <div style={{ marginBottom: 20 }}>
           <div style={{ fontSize: 20, fontWeight: 700 }}>{clubName}</div>
           <div style={{ fontSize: 13, color: '#555', marginTop: 4 }}>
