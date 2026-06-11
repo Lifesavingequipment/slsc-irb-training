@@ -495,8 +495,8 @@ export function SessionDetail() {
       </div>
 
       {/* Bottom tabs */}
-      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="flex border-b border-gray-100 overflow-x-auto">
+      <div className="bg-white rounded-xl border border-gray-200">
+        <div className="flex border-b border-gray-100 overflow-x-auto rounded-t-xl">
           {([
             { key: 'attendance', label: 'Attendance' },
             { key: 'team_draw', label: 'Team Draw' },
