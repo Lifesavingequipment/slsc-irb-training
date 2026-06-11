@@ -20,6 +20,7 @@ import { useAuth } from '../context/AuthContext'
 import type { IrbSession, IrbLocation, Member, Qualification, IrbSessionRsvp } from '../types'
 import { WaveTeamDraw } from '../components/WaveTeamDraw'
 import { AttendanceTab } from '../components/AttendanceTab'
+import { TrainingPlanTab } from '../components/TrainingPlanTab'
 
 const SESSION_TYPE_LABELS: Record<string, string> = {
   training: 'Training',
@@ -535,11 +536,12 @@ export function SessionDetail() {
             />
           </div>
         )}
-        {bottomTab === 'training_plan' && (
-          <div className="p-8 text-center">
-            <FileText size={36} className="text-gray-200 mx-auto mb-3" />
-            <p className="text-gray-400 text-sm">Training plan — coming soon.</p>
-          </div>
+        {bottomTab === 'training_plan' && currentMember && (
+          <TrainingPlanTab
+            sessionId={session.id}
+            clubId={session.club_id}
+            currentMemberId={currentMember.id}
+          />
         )}
       </div>
     </div>

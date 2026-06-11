@@ -152,5 +152,7 @@ export interface IrbSessionTrainingBlock {
   drill_id: string | null
   block_order: number
   title: string
+  description: string | null
   duration_minutes: number | null
+  notes: string | null
 }
