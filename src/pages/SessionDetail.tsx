@@ -196,20 +196,20 @@ export function SessionDetail() {
   const hasConditions = session.weather_conditions || session.sea_conditions || session.wind_speed || session.tide_info
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-4 md:p-8 max-w-6xl">
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div className="flex items-start gap-4">
+      <div className="flex items-start justify-between mb-6 gap-3">
+        <div className="flex items-start gap-3 min-w-0">
           <button
             onClick={() => navigate('/sessions')}
-            className="mt-1 p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition"
+            className="mt-1 flex items-center justify-center w-9 h-9 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition flex-shrink-0"
           >
             <ArrowLeft size={20} />
           </button>
-          <div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <h2 className="text-2xl font-bold text-gray-900">{session.title}</h2>
-              <span className={`text-sm px-2.5 py-0.5 rounded-full font-medium ${STATUS_COLORS[session.status] ?? 'bg-gray-100 text-gray-600'}`}>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h2 className="text-xl md:text-2xl font-bold text-gray-900 leading-snug">{session.title}</h2>
+              <span className={`text-sm px-2.5 py-0.5 rounded-full font-medium flex-shrink-0 ${STATUS_COLORS[session.status] ?? 'bg-gray-100 text-gray-600'}`}>
                 {session.status.charAt(0).toUpperCase() + session.status.slice(1)}
               </span>
             </div>
@@ -223,10 +223,10 @@ export function SessionDetail() {
         </div>
         <button
           onClick={() => navigate(`/sessions/${session.id}/edit`)}
-          className="flex items-center gap-2 px-4 py-2 border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition flex-shrink-0"
+          className="flex items-center gap-2 px-3 md:px-4 py-2.5 border border-gray-200 text-gray-700 rounded-lg text-sm font-medium hover:bg-gray-50 transition flex-shrink-0 min-h-[44px]"
         >
           <Edit size={15} />
-          Edit
+          <span className="hidden sm:inline">Edit</span>
         </button>
       </div>
 
@@ -496,7 +496,7 @@ export function SessionDetail() {
 
       {/* Bottom tabs */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="flex border-b border-gray-100">
+        <div className="flex border-b border-gray-100 overflow-x-auto">
           {([
             { key: 'attendance', label: 'Attendance' },
             { key: 'team_draw', label: 'Team Draw' },
@@ -505,7 +505,7 @@ export function SessionDetail() {
             <button
               key={key}
               onClick={() => setBottomTab(key)}
-              className={`px-6 py-3.5 text-sm font-medium transition border-b-2 -mb-px ${
+              className={`px-6 py-3.5 text-sm font-medium transition border-b-2 -mb-px whitespace-nowrap min-h-[44px] ${
                 bottomTab === key
                   ? 'border-primary text-primary'
                   : 'border-transparent text-gray-500 hover:text-gray-700'

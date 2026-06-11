@@ -137,30 +137,32 @@ export function Sessions() {
   }
 
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-4 md:p-8 max-w-5xl">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-gray-900">Sessions</h2>
         <button
           onClick={() => navigate('/sessions/new')}
-          className="flex items-center gap-2 px-4 py-2 bg-primary text-white rounded-lg text-sm font-medium hover:bg-red-700 transition"
+          className="flex items-center gap-2 px-3 md:px-4 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-red-700 transition min-h-[44px]"
         >
           <Plus size={16} />
-          New Session
+          <span className="hidden sm:inline">New Session</span>
         </button>
       </div>
 
-      <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit mb-6">
-        {TABS.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => setFilter(key)}
-            className={`px-4 py-1.5 rounded-md text-sm font-medium transition ${
-              filter === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+      <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0 mb-6">
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit min-w-full sm:min-w-0">
+          {TABS.map(({ key, label }) => (
+            <button
+              key={key}
+              onClick={() => setFilter(key)}
+              className={`px-4 py-2 rounded-md text-sm font-medium transition whitespace-nowrap min-h-[44px] sm:min-h-0 sm:py-1.5 ${
+                filter === key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading ? (

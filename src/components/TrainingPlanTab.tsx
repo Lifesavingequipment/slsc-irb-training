@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react'
-import { Plus, GripVertical, Edit2, Trash2, Clock, Search, X, BookOpen } from 'lucide-react'
+import { Plus, GripVertical, Edit2, Trash2, Clock, Search, X, BookOpen, ChevronUp, ChevronDown } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 
 interface TrainingBlock {
@@ -218,6 +218,24 @@ export function TrainingPlanTab({ sessionId, clubId, currentMemberId }: Props) {
     dragOverIndex.current = index
   }
 
+  async function moveBlock(index: number, direction: 'up' | 'down') {
+    const newIndex = direction === 'up' ? index - 1 : index + 1
+    if (newIndex < 0 || newIndex >= blocks.length) return
+
+    const reordered = [...blocks]
+    const [moved] = reordered.splice(index, 1)
+    reordered.splice(newIndex, 0, moved)
+
+    setBlocks(reordered.map((b, i) => ({ ...b, block_order: i + 1 })))
+
+    for (let i = 0; i < reordered.length; i++) {
+      await supabase
+        .from('irb_session_training_blocks')
+        .update({ block_order: i + 1 })
+        .eq('id', reordered[i].id)
+    }
+  }
+
   async function onDrop() {
     const from = dragIndex.current
     const to = dragOverIndex.current
@@ -302,10 +320,30 @@ export function TrainingPlanTab({ sessionId, clubId, currentMemberId }: Props) {
               onDrop={onDrop}
               className="bg-white border border-gray-200 rounded-xl p-4 flex gap-3 items-start group transition hover:border-gray-300"
             >
-              {/* Drag handle */}
+              {/* Drag handle — hidden on mobile */}
               {isTrainer && (
-                <div className="mt-0.5 text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0 pt-0.5">
+                <div className="hidden md:block mt-0.5 text-gray-300 cursor-grab active:cursor-grabbing flex-shrink-0 pt-0.5">
                   <GripVertical size={16} />
+                </div>
+              )}
+
+              {/* Up/down arrows — mobile only */}
+              {isTrainer && (
+                <div className="flex md:hidden flex-col gap-0.5 flex-shrink-0">
+                  <button
+                    onClick={() => moveBlock(index, 'up')}
+                    disabled={index === 0}
+                    className="flex items-center justify-center w-8 h-8 text-gray-400 hover:text-gray-600 disabled:opacity-20 transition"
+                  >
+                    <ChevronUp size={16} />
+                  </button>
+                  <button
+                    onClick={() => moveBlock(index, 'down')}
+                    disabled={index === blocks.length - 1}
+                    className="flex items-center justify-center w-8 h-8 text-gray-400 hover:text-gray-600 disabled:opacity-20 transition"
+                  >
+                    <ChevronDown size={16} />
+                  </button>
                 </div>
               )}
 
@@ -369,8 +407,8 @@ export function TrainingPlanTab({ sessionId, clubId, currentMemberId }: Props) {
 
       {/* Add/Edit Modal */}
       {modal.open && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-xl shadow-xl w-full sm:max-w-lg max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between p-5 border-b border-gray-100">
               <h3 className="font-semibold text-gray-900">
                 {modal.editingBlock ? 'Edit Block' : 'Add Block'}
@@ -550,8 +588,8 @@ export function TrainingPlanTab({ sessionId, clubId, currentMemberId }: Props) {
 
       {/* Confirm delete */}
       {confirmDeleteId && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl">
+        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-xl p-6 w-full sm:max-w-sm shadow-xl">
             <h3 className="font-semibold text-gray-900 mb-2">Delete block?</h3>
             <p className="text-sm text-gray-500 mb-5">
               This will remove the block from the training plan and reorder the remaining blocks.

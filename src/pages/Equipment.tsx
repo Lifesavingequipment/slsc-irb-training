@@ -106,7 +106,7 @@ export function Equipment() {
   const repairCount = equipment.filter(e => e.status === 'under_repair').length
 
   return (
-    <div className="p-8 max-w-6xl">
+    <div className="p-4 md:p-8 max-w-6xl">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -142,37 +142,41 @@ export function Equipment() {
       )}
 
       {/* Type tabs */}
-      <div className="flex gap-1 flex-wrap mb-3">
-        {TYPE_TABS.map(t => (
-          <button
-            key={t.value}
-            onClick={() => setTypeFilter(t.value)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-              typeFilter === t.value
-                ? 'bg-primary text-white'
-                : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0 mb-3">
+        <div className="flex gap-1 w-fit">
+          {TYPE_TABS.map(t => (
+            <button
+              key={t.value}
+              onClick={() => setTypeFilter(t.value)}
+              className={`px-3 py-2.5 md:py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap min-h-[44px] md:min-h-0 ${
+                typeFilter === t.value
+                  ? 'bg-primary text-white'
+                  : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Status filter */}
-      <div className="flex gap-1 flex-wrap mb-6">
-        {STATUS_FILTERS.map(s => (
-          <button
-            key={s.value}
-            onClick={() => setStatusFilter(s.value)}
-            className={`px-3 py-1.5 rounded-lg text-sm font-medium transition ${
-              statusFilter === s.value
-                ? 'bg-gray-800 text-white'
-                : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
-            }`}
-          >
-            {s.label}
-          </button>
-        ))}
+      <div className="overflow-x-auto -mx-4 md:mx-0 px-4 md:px-0 mb-6">
+        <div className="flex gap-1 w-fit">
+          {STATUS_FILTERS.map(s => (
+            <button
+              key={s.value}
+              onClick={() => setStatusFilter(s.value)}
+              className={`px-3 py-2.5 md:py-1.5 rounded-lg text-sm font-medium transition whitespace-nowrap min-h-[44px] md:min-h-0 ${
+                statusFilter === s.value
+                  ? 'bg-gray-800 text-white'
+                  : 'bg-white border border-gray-200 text-gray-600 hover:border-gray-300'
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {loading ? (

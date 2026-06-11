@@ -46,7 +46,7 @@ export function Members() {
   }
 
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-4 md:p-8 max-w-5xl">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-900">Members</h2>
         <p className="text-gray-500 text-sm mt-0.5">View club members (read-only)</p>
@@ -75,7 +75,8 @@ export function Members() {
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-[560px]">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
                 <th className="text-left px-6 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">Member</th>
@@ -106,6 +107,7 @@ export function Members() {
               ))}
             </tbody>
           </table>
+          </div>
           <div className="px-6 py-3 border-t border-gray-100 bg-gray-50 text-xs text-gray-400">
             {filtered.length} member{filtered.length !== 1 ? 's' : ''}
           </div>

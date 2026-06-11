@@ -331,7 +331,7 @@ export function WaveTeamDraw({
             <>
               <button
                 onClick={() => window.print()}
-                className="flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
+                className="hidden sm:flex items-center gap-1.5 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
               >
                 <Printer size={15} />
                 Print Draw
@@ -348,9 +348,136 @@ export function WaveTeamDraw({
           )}
         </div>
 
-        {/* Draw grid */}
+        {/* Mobile draw — stacked waves/lanes */}
         {generated && (
-          <div className="overflow-x-auto">
+          <div className="md:hidden space-y-6">
+            {Array.from({ length: numWaves }, (_, wi) => {
+              const wave = wi + 1
+              const { driverIds, crewIds } = getWaveMemberSets(wave)
+              return (
+                <div key={wave}>
+                  <h4 className="text-sm font-semibold text-gray-600 uppercase tracking-wide mb-3 px-1">
+                    Wave {wave}
+                  </h4>
+                  <div className="space-y-3">
+                    {Array.from({ length: numLanes }, (_, li) => {
+                      const lane = li + 1
+                      const key = `${wave}-${lane}`
+                      const cell: CellData = cells[key] ?? {
+                        dbId: null, boat_id: '', driver_id: '', crew_id: '', patient_id: '', notes: '',
+                      }
+                      const isSaved = savedKeys.has(key)
+
+                      const warnings: string[] = []
+                      if (cell.driver_id && cell.driver_id === cell.crew_id) {
+                        warnings.push('Driver and crew cannot be the same person')
+                      } else {
+                        if (cell.driver_id && crewIds.has(cell.driver_id)) {
+                          warnings.push(`${memberName(cell.driver_id)} is also assigned as crew in Wave ${wave}`)
+                        }
+                        if (cell.crew_id && driverIds.has(cell.crew_id)) {
+                          warnings.push(`${memberName(cell.crew_id)} is also assigned as driver in Wave ${wave}`)
+                        }
+                      }
+                      if (cell.driver_id && !attendingMemberIds.has(cell.driver_id)) {
+                        warnings.push(`${memberName(cell.driver_id)} has not RSVP'd as attending`)
+                      }
+                      if (cell.crew_id && !attendingMemberIds.has(cell.crew_id)) {
+                        warnings.push(`${memberName(cell.crew_id)} has not RSVP'd as attending`)
+                      }
+
+                      return (
+                        <div key={key} className="bg-gray-50 rounded-xl border border-gray-200 p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                              Lane {lane}
+                            </span>
+                            {isSaved && <span className="text-xs font-semibold text-emerald-500">✓ Saved</span>}
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-400 mb-1 font-medium">Boat</label>
+                            <select
+                              value={cell.boat_id}
+                              onChange={e => handleChange(wave, lane, 'boat_id', e.target.value)}
+                              className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
+                            >
+                              <option value="">— Select boat —</option>
+                              {boats.map(b => (
+                                <option key={b.id} value={b.id}>{boatLabel(b)}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-400 mb-1 font-medium">Driver (IRB-D)</label>
+                            <select
+                              value={cell.driver_id}
+                              onChange={e => handleChange(wave, lane, 'driver_id', e.target.value)}
+                              className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
+                            >
+                              <option value="">— Select driver —</option>
+                              {drivers.map(m => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-400 mb-1 font-medium">Crew (IRB-C)</label>
+                            <select
+                              value={cell.crew_id}
+                              onChange={e => handleChange(wave, lane, 'crew_id', e.target.value)}
+                              className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
+                            >
+                              <option value="">— Select crew —</option>
+                              {crews.map(m => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-400 mb-1 font-medium">Patient (optional)</label>
+                            <select
+                              value={cell.patient_id}
+                              onChange={e => handleChange(wave, lane, 'patient_id', e.target.value)}
+                              className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
+                            >
+                              <option value="">— Select patient —</option>
+                              {allMembers.map(m => (
+                                <option key={m.id} value={m.id}>{m.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-gray-400 mb-1 font-medium">Notes</label>
+                            <input
+                              type="text"
+                              value={cell.notes}
+                              onChange={e => handleChange(wave, lane, 'notes', e.target.value)}
+                              placeholder="Team notes…"
+                              className="w-full px-3 py-3 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-1 focus:ring-primary/30"
+                            />
+                          </div>
+                          {warnings.length > 0 && (
+                            <div className="space-y-1">
+                              {warnings.map((w, i) => (
+                                <p key={i} className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                                  ⚠ {w}
+                                </p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
+
+        {/* Desktop draw grid */}
+        {generated && (
+          <div className="hidden md:block overflow-x-auto">
             <div
               className="grid gap-3"
               style={{

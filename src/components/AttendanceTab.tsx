@@ -279,7 +279,7 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
         <>
           {/* Summary bar — trainer view only */}
           {isTrainer && (
-            <div className="flex flex-wrap gap-5 mb-5 p-4 bg-gray-50 rounded-lg border border-gray-100">
+            <div className="flex overflow-x-auto gap-5 mb-5 p-4 bg-gray-50 rounded-lg border border-gray-100">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm text-gray-500">Total</span>
                 <span className="text-sm font-bold text-gray-900">{records.length}</span>
@@ -342,17 +342,19 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
                       </div>
 
                       {/* Fields */}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 items-end">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
                         {/* Attended toggle */}
                         <div>
                           <label className="text-xs text-gray-400 mb-1.5 block">Attended</label>
-                          <button
-                            disabled={!canEdit || (!isActive && !isTrainer)}
-                            onClick={() => canEdit && updateRecord(rec.id, 'attended', !rec.attended)}
-                            className={`relative flex items-center w-14 h-7 rounded-full transition-colors ${rec.attended ? 'bg-emerald-500' : 'bg-gray-200'} ${!canEdit ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
-                          >
-                            <span className={`absolute w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${rec.attended ? 'translate-x-8' : 'translate-x-1'}`} />
-                          </button>
+                          <div className="flex items-center min-h-[44px]">
+                            <button
+                              disabled={!canEdit || (!isActive && !isTrainer)}
+                              onClick={() => canEdit && updateRecord(rec.id, 'attended', !rec.attended)}
+                              className={`relative flex items-center w-14 h-8 rounded-full transition-colors ${rec.attended ? 'bg-emerald-500' : 'bg-gray-200'} ${!canEdit ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}`}
+                            >
+                              <span className={`absolute w-6 h-6 rounded-full bg-white shadow-sm transition-transform ${rec.attended ? 'translate-x-7' : 'translate-x-1'}`} />
+                            </button>
+                          </div>
                         </div>
 
                         {/* Role on day */}
@@ -362,7 +364,7 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
                             <select
                               value={rec.role_on_day ?? ''}
                               onChange={e => updateRecord(rec.id, 'role_on_day', e.target.value || null)}
-                              className="w-full text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white outline-none focus:border-primary"
+                              className="w-full text-sm border border-gray-200 rounded-md px-2 py-3 sm:py-1.5 bg-white outline-none focus:border-primary min-h-[44px] sm:min-h-0"
                             >
                               <option value="">—</option>
                               {ROLE_OPTIONS.map(r => (
@@ -382,7 +384,7 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
                               type="time"
                               value={rec.arrived_at ?? ''}
                               onChange={e => updateRecord(rec.id, 'arrived_at', e.target.value || null)}
-                              className="w-full text-sm border border-gray-200 rounded-md px-2 py-1.5 bg-white outline-none focus:border-primary"
+                              className="w-full text-sm border border-gray-200 rounded-md px-2 py-3 sm:py-1.5 bg-white outline-none focus:border-primary min-h-[44px] sm:min-h-0"
                             />
                           ) : (
                             <span className="text-sm text-gray-700">{rec.arrived_at ?? '—'}</span>
@@ -393,14 +395,14 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
                         {isTrainer && (
                           <div>
                             <label className="text-xs text-gray-400 mb-1 block">Performance</label>
-                            <div className="flex gap-0.5">
+                            <div className="flex gap-1">
                               {[1, 2, 3, 4, 5].map(star => (
                                 <button
                                   key={star}
                                   onClick={() => updateRecord(rec.id, 'performance_rating', rec.performance_rating === star ? null : star)}
-                                  className={`transition ${star <= (rec.performance_rating ?? 0) ? 'text-amber-400' : 'text-gray-200'} hover:text-amber-300`}
+                                  className={`flex items-center justify-center w-9 h-9 sm:w-7 sm:h-7 transition ${star <= (rec.performance_rating ?? 0) ? 'text-amber-400' : 'text-gray-200'} hover:text-amber-300`}
                                 >
-                                  <Star size={16} fill={star <= (rec.performance_rating ?? 0) ? 'currentColor' : 'none'} />
+                                  <Star size={20} fill={star <= (rec.performance_rating ?? 0) ? 'currentColor' : 'none'} />
                                 </button>
                               ))}
                             </div>
@@ -411,12 +413,14 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
                         {isTrainer && (
                           <div>
                             <label className="text-xs text-gray-400 mb-1.5 block">Signed off</label>
-                            <button
-                              onClick={() => updateRecord(rec.id, 'signed_off', !rec.signed_off)}
-                              className={`relative flex items-center w-14 h-7 rounded-full transition-colors ${rec.signed_off ? 'bg-blue-500' : 'bg-gray-200'}`}
-                            >
-                              <span className={`absolute w-5 h-5 rounded-full bg-white shadow-sm transition-transform ${rec.signed_off ? 'translate-x-8' : 'translate-x-1'}`} />
-                            </button>
+                            <div className="flex items-center min-h-[44px]">
+                              <button
+                                onClick={() => updateRecord(rec.id, 'signed_off', !rec.signed_off)}
+                                className={`relative flex items-center w-14 h-8 rounded-full transition-colors ${rec.signed_off ? 'bg-blue-500' : 'bg-gray-200'}`}
+                              >
+                                <span className={`absolute w-6 h-6 rounded-full bg-white shadow-sm transition-transform ${rec.signed_off ? 'translate-x-7' : 'translate-x-1'}`} />
+                              </button>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -458,8 +462,8 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
 
       {/* Confirm remove dialog */}
       {confirmRemoveId && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl">
+        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-xl p-6 w-full sm:max-w-sm shadow-xl">
             <h3 className="font-semibold text-gray-900 mb-2">Remove attendee?</h3>
             <p className="text-sm text-gray-500 mb-5">This will delete their attendance record for this session.</p>
             <div className="flex gap-3">
@@ -482,8 +486,8 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
 
       {/* Confirm sign-off dialog */}
       {confirmSignOff && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 max-w-sm w-full shadow-xl">
+        <div className="fixed inset-0 bg-black/40 flex items-end sm:items-center justify-center z-50 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-xl p-6 w-full sm:max-w-sm shadow-xl">
             <h3 className="font-semibold text-gray-900 mb-2">Sign off all attended?</h3>
             <p className="text-sm text-gray-500 mb-5">
               This will sign off {records.filter(r => r.attended && !r.signed_off).length} member(s) who attended this session.

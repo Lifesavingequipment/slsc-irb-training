@@ -199,7 +199,7 @@ export function SessionForm() {
   }
 
   return (
-    <div className="p-8 max-w-3xl">
+    <div className="p-4 md:p-8 max-w-3xl">
       <div className="flex items-center gap-4 mb-8">
         <button
           onClick={() => navigate(isEdit && id ? `/sessions/${id}` : '/sessions')}
@@ -224,7 +224,7 @@ export function SessionForm() {
                 value={form.title}
                 onChange={e => set('title', e.target.value)}
                 placeholder="e.g. Sunday Morning Training"
-                className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${errors.title ? 'border-red-300' : 'border-gray-300'}`}
+                className={`w-full px-3 py-3 md:py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${errors.title ? 'border-red-300' : 'border-gray-300'}`}
               />
               {errors.title && <p className="text-red-500 text-xs mt-1">{errors.title}</p>}
             </div>
@@ -234,7 +234,7 @@ export function SessionForm() {
               <select
                 value={form.session_type}
                 onChange={e => set('session_type', e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                className="w-full px-3 py-3 md:py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
               >
                 {SESSION_TYPES.map(t => (
                   <option key={t.value} value={t.value}>{t.label}</option>
@@ -251,7 +251,7 @@ export function SessionForm() {
                   type="date"
                   value={form.scheduled_date}
                   onChange={e => set('scheduled_date', e.target.value)}
-                  className={`w-full px-3 py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${errors.scheduled_date ? 'border-red-300' : 'border-gray-300'}`}
+                  className={`w-full px-3 py-3 md:py-2.5 border rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent ${errors.scheduled_date ? 'border-red-300' : 'border-gray-300'}`}
                 />
                 {errors.scheduled_date && <p className="text-red-500 text-xs mt-1">{errors.scheduled_date}</p>}
               </div>
@@ -288,7 +288,7 @@ export function SessionForm() {
                     set('location_id', e.target.value)
                   }
                 }}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                className="w-full px-3 py-3 md:py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
               >
                 <option value="">Not specified</option>
                 {locations.map(l => (
@@ -336,7 +336,7 @@ export function SessionForm() {
               <select
                 value={form.lead_trainer_id}
                 onChange={e => set('lead_trainer_id', e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                className="w-full px-3 py-3 md:py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
               >
                 <option value="">Not assigned</option>
                 {members.map(m => (
@@ -350,7 +350,7 @@ export function SessionForm() {
               <select
                 value={form.qualification_id}
                 onChange={e => set('qualification_id', e.target.value)}
-                className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                className="w-full px-3 py-3 md:py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
               >
                 <option value="">Not specified</option>
                 {qualifications.map(q => (
@@ -419,7 +419,7 @@ export function SessionForm() {
                 <select
                   value={form.sea_conditions}
                   onChange={e => set('sea_conditions', e.target.value)}
-                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
+                  className="w-full px-3 py-3 md:py-2.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent bg-white"
                 >
                   {SEA_CONDITIONS.map(c => (
                     <option key={c.value} value={c.value}>{c.label}</option>
@@ -469,13 +469,13 @@ export function SessionForm() {
           <button
             onClick={handleSubmit}
             disabled={saving}
-            className="px-6 py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-red-700 transition disabled:opacity-50"
+            className="px-6 py-3 md:py-2.5 bg-primary text-white rounded-lg text-sm font-medium hover:bg-red-700 transition disabled:opacity-50 min-h-[44px]"
           >
             {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create Session'}
           </button>
           <button
             onClick={() => navigate(isEdit && id ? `/sessions/${id}` : '/sessions')}
-            className="px-6 py-2.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
+            className="px-6 py-3 md:py-2.5 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition min-h-[44px]"
           >
             Cancel
           </button>

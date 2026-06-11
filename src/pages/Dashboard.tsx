@@ -118,7 +118,6 @@ export function Dashboard() {
 
   async function loadStatCards(clubId: string) {
     const now = new Date()
-    const monthStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0)
     const monthEndStr = monthEnd.toISOString().split('T')[0]
     const today = now.toISOString().split('T')[0]
@@ -236,7 +235,7 @@ export function Dashboard() {
         .eq('member_id', memberId),
     ])
 
-    const attendRows = (attendRes.data ?? []) as Array<{
+    const attendRows = (attendRes.data ?? []) as unknown as Array<{
       role_on_day: string | null
       attended: boolean
       irb_sessions: { scheduled_date: string; club_id: string }
@@ -418,7 +417,7 @@ export function Dashboard() {
   const displayName = member?.preferred_name || member?.first_name || 'there'
 
   return (
-    <div className="p-8 max-w-5xl space-y-8">
+    <div className="p-4 md:p-8 max-w-5xl space-y-6 md:space-y-8">
       {/* Greeting */}
       <div>
         <h2 className="text-2xl font-bold text-gray-900">Good day, {displayName}</h2>

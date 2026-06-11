@@ -53,11 +53,6 @@ function serviceDueState(dateStr: string | null): 'overdue' | 'soon' | null {
   return null
 }
 
-interface MemberName {
-  id: string
-  name: string
-}
-
 // ---- MODALS ----------------------------------------------------------------
 
 function ReportFaultModal({
@@ -357,12 +352,12 @@ function EquipmentFormModal({
 
 function ModalShell({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative bg-white rounded-2xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6">
+      <div className="relative bg-white w-full rounded-t-2xl sm:rounded-2xl shadow-xl sm:max-w-lg max-h-[92vh] overflow-y-auto p-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+          <button onClick={onClose} className="flex items-center justify-center w-9 h-9 text-gray-400 hover:text-gray-600"><X size={20} /></button>
         </div>
         {children}
       </div>
@@ -472,7 +467,7 @@ export function EquipmentDetail() {
   const displayFaults = faultTab === 'open' ? openFaults : resolvedFaults
 
   return (
-    <div className="p-8 max-w-5xl">
+    <div className="p-4 md:p-8 max-w-5xl">
       {/* Back */}
       <button onClick={() => navigate('/equipment')} className="flex items-center gap-2 text-sm text-gray-500 hover:text-gray-900 mb-6 transition">
         <ArrowLeft size={16} /> Back to Equipment
