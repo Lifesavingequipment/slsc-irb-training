@@ -85,11 +85,13 @@ export function AttendanceTab({ sessionId, clubId, sessionStatus, currentMemberI
     const [attendanceRes, membersRes, rolesRes] = await Promise.all([
       supabase.from('irb_attendance').select('*').eq('session_id', sessionId).eq('club_id', clubId),
       supabase.from('members').select('id, first_name, last_name, preferred_name').eq('club_id', clubId).order('last_name'),
-      supabase.from('member_roles').select('role_name').eq('member_id', currentMemberId).eq('club_id', clubId).eq('is_active', true),
+      supabase.from('member_roles').select('role_name').eq('member_id', currentMemberId).eq('is_active', true),
     ])
 
     const roleNames = (rolesRes.data ?? []).map((r: { role_name: string }) => r.role_name)
-    setIsTrainer(roleNames.includes('irb_trainer') || roleNames.includes('club_admin'))
+    const trainerCheck = roleNames.includes('irb_trainer') || roleNames.includes('club_admin')
+    console.log('[AttendanceTab] roles:', roleNames, '| isTrainer:', trainerCheck)
+    setIsTrainer(trainerCheck)
 
     const memberMap = new Map<string, MemberOption>()
     for (const m of (membersRes.data ?? [])) {
