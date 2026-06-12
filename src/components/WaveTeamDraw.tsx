@@ -1,11 +1,12 @@
 import { useEffect, useState, useRef } from 'react'
-import { Printer, Trash2, Copy, Zap, Users, X } from 'lucide-react'
+import { Printer, Trash2, Copy, Zap, Users, X, Settings2 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 
 interface MemberOption {
   id: string
-  name: string
+  name: string       // full name for dropdowns / print
+  firstName: string  // first name for availability chips
 }
 
 interface BoatOption {
@@ -31,15 +32,54 @@ interface Props {
   clubName: string
   sessionTitle: string
   sessionDate: string
-  attendingMemberIds: Set<string>
+  attendingMemberIds: Set<string> // kept for prop compat — draw uses irb_attendance directly
 }
 
+const EMPTY_CELL: CellData = {
+  dbId: null, boat_id: '', driver_id: '', crew_id: '', patient_id: '', notes: '',
+}
+
+const MAX_W = 10
+const MAX_L = 10
+
+// Presets: common wave×lane combos up to 10×10
 const PRESETS: [number, number][] = [
   [1, 1], [1, 2], [1, 3], [1, 4], [1, 5],
-  [2, 1], [2, 2], [3, 1],
+  [2, 2], [2, 3], [2, 4], [2, 5],
+  [3, 3], [3, 4], [3, 5],
+  [4, 4], [4, 5],
+  [5, 5], [5, 6],
+  [6, 6], [6, 8],
+  [8, 8], [10, 5], [10, 10],
 ]
 
-const EMPTY_CELL: CellData = { dbId: null, boat_id: '', driver_id: '', crew_id: '', patient_id: '', notes: '' }
+function memberFirstName(m: MemberOption) {
+  return m.firstName || m.name.split(' ')[0] || m.name
+}
+
+function boatLabel(b: BoatOption) {
+  return b.identifier ? `${b.name} (${b.identifier})` : b.name
+}
+
+function formatDateForPrint(date: string) {
+  return new Date(date + 'T00:00:00').toLocaleDateString('en-AU', {
+    weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
+  })
+}
+
+function findBestPreset(count: number): [number, number] {
+  let best: [number, number] = [1, 2]
+  let bestEmpty = Infinity
+  for (const [w, l] of PRESETS) {
+    const slots = w * l
+    const empty = slots - count
+    if (empty >= 0 && empty < bestEmpty) {
+      bestEmpty = empty
+      best = [w, l]
+    }
+  }
+  return best
+}
 
 export function WaveTeamDraw({
   sessionId,
@@ -47,18 +87,22 @@ export function WaveTeamDraw({
   clubName,
   sessionTitle,
   sessionDate,
-  attendingMemberIds,
 }: Props) {
   const { member: currentMember } = useAuth()
 
+  // ── Capacity inputs ──
   const [numWaves, setNumWaves] = useState(1)
   const [numLanes, setNumLanes] = useState(2)
+  const [waveInput, setWaveInput] = useState('1')
+  const [laneInput, setLaneInput] = useState('2')
+
+  // ── Data ──
   const [cells, setCells] = useState<Record<CellKey, CellData>>({})
   const [savedKeys, setSavedKeys] = useState<Set<CellKey>>(new Set())
   const [boats, setBoats] = useState<BoatOption[]>([])
   const [drivers, setDrivers] = useState<MemberOption[]>([])
   const [crews, setCrews] = useState<MemberOption[]>([])
-  const [attendingMembers, setAttendingMembers] = useState<MemberOption[]>([])
+  const [allAttending, setAllAttending] = useState<MemberOption[]>([])
   const [allMembers, setAllMembers] = useState<MemberOption[]>([])
   const [loadingData, setLoadingData] = useState(true)
   const [clearing, setClearing] = useState(false)
@@ -66,6 +110,7 @@ export function WaveTeamDraw({
   const [autopairing, setAutopairing] = useState(false)
   const [shareToast, setShareToast] = useState(false)
 
+  // ── Modals ──
   const [editModal, setEditModal] = useState<{ wave: number; lane: number } | null>(null)
   const [editData, setEditData] = useState<CellData | null>(null)
 
@@ -81,6 +126,16 @@ export function WaveTeamDraw({
     loadData()
   }, [sessionId, clubId])
 
+  // Keep numeric state in sync with text inputs
+  function applyCapacity() {
+    const w = Math.max(1, Math.min(MAX_W, parseInt(waveInput) || 1))
+    const l = Math.max(1, Math.min(MAX_L, parseInt(laneInput) || 1))
+    setNumWaves(w)
+    setNumLanes(l)
+    setWaveInput(String(w))
+    setLaneInput(String(l))
+  }
+
   async function loadData() {
     setLoadingData(true)
 
@@ -93,61 +148,81 @@ export function WaveTeamDraw({
           .eq('is_active', true)
       : Promise.resolve({ data: [] as { role_name: string }[], error: null })
 
-    const [boatsRes, irbDRes, irbCRes, membersRes, teamsRes, rolesRes] = await Promise.all([
-      supabase
-        .from('irb_equipment')
-        .select('id, name, identifier')
-        .eq('club_id', clubId)
-        .eq('equipment_type', 'boat')
-        .eq('status', 'operational'),
-      supabase
-        .from('member_qualifications')
-        .select('member_id, qualifications!inner(code)')
-        .eq('club_id', clubId)
-        .eq('status', 'current')
-        .eq('qualifications.code', 'IRB-D'),
-      supabase
-        .from('member_qualifications')
-        .select('member_id, qualifications!inner(code)')
-        .eq('club_id', clubId)
-        .eq('status', 'current')
-        .eq('qualifications.code', 'IRB-C'),
-      supabase
-        .from('members')
-        .select('id, first_name, last_name, preferred_name')
-        .eq('club_id', clubId),
-      supabase
-        .from('irb_session_teams')
-        .select('*')
-        .eq('session_id', sessionId)
-        .eq('club_id', clubId),
-      rolesQuery,
-    ])
+    const [boatsRes, irbDRes, irbCRes, membersRes, teamsRes, rolesRes, attendanceRes] =
+      await Promise.all([
+        supabase
+          .from('irb_equipment')
+          .select('id, name, identifier')
+          .eq('club_id', clubId)
+          .eq('equipment_type', 'boat')
+          .eq('status', 'operational'),
+        supabase
+          .from('member_qualifications')
+          .select('member_id, qualifications!inner(code)')
+          .eq('club_id', clubId)
+          .eq('status', 'current')
+          .eq('qualifications.code', 'IRB-D'),
+        supabase
+          .from('member_qualifications')
+          .select('member_id, qualifications!inner(code)')
+          .eq('club_id', clubId)
+          .eq('status', 'current')
+          .eq('qualifications.code', 'IRB-C'),
+        supabase
+          .from('members')
+          .select('id, first_name, last_name, preferred_name')
+          .eq('club_id', clubId),
+        supabase
+          .from('irb_session_teams')
+          .select('*')
+          .eq('session_id', sessionId)
+          .eq('club_id', clubId),
+        rolesQuery,
+        // ── KEY FIX: use irb_attendance instead of RSVPs ──
+        supabase
+          .from('irb_attendance')
+          .select('member_id')
+          .eq('session_id', sessionId)
+          .eq('club_id', clubId)
+          .eq('attended', true),
+      ])
 
     setBoats(
-      (boatsRes.data ?? []).map((b: any) => ({ id: b.id, name: b.name, identifier: b.identifier }))
+      (boatsRes.data ?? []).map((b: any) => ({
+        id: b.id, name: b.name, identifier: b.identifier,
+      }))
     )
 
     const roles = ((rolesRes as any).data ?? []).map((r: any) => r.role_name as string)
     setIsTrainer(roles.includes('irb_trainer') || roles.includes('club_admin'))
 
-    const driverIdSet = new Set((irbDRes.data ?? []).map((r: any) => r.member_id as string))
-    const crewIdSet = new Set((irbCRes.data ?? []).map((r: any) => r.member_id as string))
+    const driverIdSet = new Set(
+      (irbDRes.data ?? []).map((r: any) => r.member_id as string)
+    )
+    const crewIdSet = new Set(
+      (irbCRes.data ?? []).map((r: any) => r.member_id as string)
+    )
 
-    const memberList: MemberOption[] = (membersRes.data ?? []).map((m: any) => ({
-      id: m.id,
-      name: m.preferred_name
+    // Build member options with first-name extraction
+    const memberList: MemberOption[] = (membersRes.data ?? []).map((m: any) => {
+      const displayName = m.preferred_name
         ? `${m.preferred_name} ${m.last_name}`
-        : `${m.first_name} ${m.last_name}`,
-    }))
-
+        : `${m.first_name} ${m.last_name}`
+      const firstName = m.preferred_name || m.first_name || displayName.split(' ')[0]
+      return { id: m.id, name: displayName, firstName }
+    })
     setAllMembers(memberList)
 
-    const attendingList = memberList.filter(m => attendingMemberIds.has(m.id))
-    setAttendingMembers(attendingList)
+    // Members who attended this session (irb_attendance.attended = true)
+    const attendedIds = new Set(
+      (attendanceRes.data ?? []).map((a: any) => a.member_id as string)
+    )
+    const attendingList = memberList.filter(m => attendedIds.has(m.id))
+    setAllAttending(attendingList)
     setDrivers(attendingList.filter(m => driverIdSet.has(m.id)))
     setCrews(attendingList.filter(m => crewIdSet.has(m.id)))
 
+    // Restore existing draw
     const teams: any[] = teamsRes.data ?? []
     if (teams.length > 0) {
       const cellMap: Record<CellKey, CellData> = {}
@@ -167,48 +242,19 @@ export function WaveTeamDraw({
           notes: t.notes ?? '',
         }
       }
-      setNumWaves(Math.max(maxWave, 1))
-      setNumLanes(Math.max(maxLane, 1))
+      const w = Math.max(maxWave, 1)
+      const l = Math.max(maxLane, 1)
+      setNumWaves(w)
+      setNumLanes(l)
+      setWaveInput(String(w))
+      setLaneInput(String(l))
       setCells(cellMap)
     }
 
     setLoadingData(false)
   }
 
-  // Count of slots that have at least a driver or crew assigned
-  const teamCount = Object.values(cells).filter(c => c.driver_id || c.crew_id).length
-
-  function findBestPreset(count: number): [number, number] {
-    let best: [number, number] = [1, 2]
-    let bestEmpty = Infinity
-    for (const [w, l] of PRESETS) {
-      const slots = w * l
-      const empty = slots - count
-      if (empty >= 0 && empty < bestEmpty) {
-        bestEmpty = empty
-        best = [w, l]
-      }
-    }
-    return best
-  }
-
-  function memberName(id: string) {
-    return allMembers.find(m => m.id === id)?.name ?? '—'
-  }
-
-  function boatLabel(b: BoatOption) {
-    return b.identifier ? `${b.name} (${b.identifier})` : b.name
-  }
-
-  function formatDateForPrint(date: string) {
-    return new Date(date + 'T00:00:00').toLocaleDateString('en-AU', {
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    })
-  }
-
+  // ── Save helpers ──
   async function performSave(key: CellKey, wave: number, lane: number, data: CellData) {
     const payload = {
       club_id: clubId,
@@ -221,7 +267,6 @@ export function WaveTeamDraw({
       patient_id: data.patient_id || null,
       notes: data.notes || null,
     }
-
     if (data.dbId) {
       await supabase.from('irb_session_teams').update(payload).eq('id', data.dbId)
     } else {
@@ -234,7 +279,6 @@ export function WaveTeamDraw({
         setCells(prev => ({ ...prev, [key]: { ...prev[key], dbId: inserted.id } }))
       }
     }
-
     setSavedKeys(prev => new Set([...prev, key]))
     if (savedTimers.current[key]) clearTimeout(savedTimers.current[key])
     savedTimers.current[key] = setTimeout(() => {
@@ -246,6 +290,21 @@ export function WaveTeamDraw({
     }, 2000)
   }
 
+  // Inline slot assignment — auto-saves immediately
+  async function assignSlotField(
+    wave: number,
+    lane: number,
+    field: 'driver_id' | 'crew_id',
+    value: string,
+  ) {
+    const key: CellKey = `${wave}-${lane}`
+    const existing = cells[key] ?? { ...EMPTY_CELL }
+    const updated = { ...existing, [field]: value }
+    setCells(prev => ({ ...prev, [key]: updated }))
+    await performSave(key, wave, lane, updated)
+  }
+
+  // ── Clear ──
   async function clearDraw() {
     if (!confirm('Remove all team assignments for this session? This cannot be undone.')) return
     setClearing(true)
@@ -258,30 +317,39 @@ export function WaveTeamDraw({
     setClearing(false)
   }
 
+  // ── Auto-pair ──
   async function autoPair() {
     setAutopairing(true)
-
     await supabase
       .from('irb_session_teams')
       .delete()
       .eq('session_id', sessionId)
       .eq('club_id', clubId)
 
-    // Pair each driver with an available crew member
     const pairs: { driver_id: string; crew_id: string }[] = []
     const usedCrews = new Set<string>()
-
     for (const d of drivers) {
       const c = crews.find(cr => !usedCrews.has(cr.id) && cr.id !== d.id)
       if (c) {
         pairs.push({ driver_id: d.id, crew_id: c.id })
         usedCrews.add(c.id)
+      } else {
+        pairs.push({ driver_id: d.id, crew_id: '' })
+      }
+    }
+    // Any crew left over without a driver
+    const usedDriverIds = new Set(pairs.map(p => p.driver_id))
+    for (const c of crews) {
+      if (!usedCrews.has(c.id) && !usedDriverIds.has(c.id)) {
+        pairs.push({ driver_id: '', crew_id: c.id })
       }
     }
 
     const [bestW, bestL] = findBestPreset(pairs.length)
     setNumWaves(bestW)
     setNumLanes(bestL)
+    setWaveInput(String(bestW))
+    setLaneInput(String(bestL))
 
     const newCells: Record<CellKey, CellData> = {}
     for (let i = 0; i < pairs.length; i++) {
@@ -293,8 +361,8 @@ export function WaveTeamDraw({
         session_id: sessionId,
         wave_number: wave,
         lane_number: lane,
-        driver_id: pairs[i].driver_id,
-        crew_id: pairs[i].crew_id,
+        driver_id: pairs[i].driver_id || null,
+        crew_id: pairs[i].crew_id || null,
         boat_id: null,
         patient_id: null,
         notes: null,
@@ -313,26 +381,27 @@ export function WaveTeamDraw({
         notes: '',
       }
     }
-
     setCells(newCells)
     setAutopairing(false)
   }
 
+  // ── Confirmed pairs modal ──
   async function createConfirmedPairs() {
     const validPairs = pendingPairs.filter(p => p.driver_id || p.crew_id)
     if (validPairs.length === 0) return
     setCreatingPairs(true)
 
+    const teamCount = Object.values(cells).filter(c => c.driver_id || c.crew_id).length
     const totalNeeded = teamCount + validPairs.length
     const [bestW, bestL] = findBestPreset(totalNeeded)
     setNumWaves(bestW)
     setNumLanes(bestL)
+    setWaveInput(String(bestW))
+    setLaneInput(String(bestL))
 
     const newCells = { ...cells }
     let slotIndex = 0
-
     for (const pair of validPairs) {
-      // Advance to next empty slot
       while (slotIndex < bestW * bestL) {
         const wave = Math.floor(slotIndex / bestL) + 1
         const lane = (slotIndex % bestL) + 1
@@ -368,36 +437,17 @@ export function WaveTeamDraw({
         slotIndex++
       }
     }
-
     setCells(newCells)
     setPairsModal(false)
     setPendingPairs([{ driver_id: '', crew_id: '' }])
     setCreatingPairs(false)
   }
 
-  async function shareDraw() {
-    const lines: string[] = [`${clubName} — ${sessionTitle}`, formatDateForPrint(sessionDate), '']
-    for (let w = 1; w <= numWaves; w++) {
-      lines.push(`Wave ${w}:`)
-      for (let l = 1; l <= numLanes; l++) {
-        const cell = cells[`${w}-${l}`]
-        const driver = cell?.driver_id ? memberName(cell.driver_id) : null
-        const crew = cell?.crew_id ? memberName(cell.crew_id) : null
-        const parts = [driver, crew].filter(Boolean).join(' + ')
-        lines.push(`  L${l}: ${parts || '—'}`)
-      }
-      lines.push('')
-    }
-    await navigator.clipboard.writeText(lines.join('\n'))
-    setShareToast(true)
-    setTimeout(() => setShareToast(false), 2500)
-  }
-
+  // ── Edit modal (boat / patient / notes) ──
   function openEdit(wave: number, lane: number) {
     if (!isTrainer) return
     const key = `${wave}-${lane}`
-    const cell = cells[key] ?? { ...EMPTY_CELL }
-    setEditData({ ...cell })
+    setEditData({ ...(cells[key] ?? EMPTY_CELL) })
     setEditModal({ wave, lane })
   }
 
@@ -427,11 +477,35 @@ export function WaveTeamDraw({
     setEditData(null)
   }
 
+  // ── Share ──
+  async function shareDraw() {
+    const lines: string[] = [`${clubName} — ${sessionTitle}`, formatDateForPrint(sessionDate), '']
+    for (let w = 1; w <= numWaves; w++) {
+      lines.push(`Wave ${w}:`)
+      for (let l = 1; l <= numLanes; l++) {
+        const cell = cells[`${w}-${l}`]
+        const dName = cell?.driver_id ? (allMembers.find(m => m.id === cell.driver_id)?.name ?? '—') : null
+        const cName = cell?.crew_id ? (allMembers.find(m => m.id === cell.crew_id)?.name ?? '—') : null
+        const parts = [dName, cName].filter(Boolean).join(' + ')
+        lines.push(`  L${l}: ${parts || '—'}`)
+      }
+      lines.push('')
+    }
+    await navigator.clipboard.writeText(lines.join('\n'))
+    setShareToast(true)
+    setTimeout(() => setShareToast(false), 2500)
+  }
+
   if (loadingData) {
     return <div className="p-8 text-center text-gray-400 text-sm">Loading draw data…</div>
   }
 
+  const teamCount = Object.values(cells).filter(c => c.driver_id || c.crew_id).length
   const [autoW, autoL] = findBestPreset(teamCount)
+
+  // Which member IDs are already assigned as driver or crew
+  const assignedDriverIds = new Set(Object.values(cells).map(c => c.driver_id).filter(Boolean))
+  const assignedCrewIds = new Set(Object.values(cells).map(c => c.crew_id).filter(Boolean))
 
   return (
     <>
@@ -442,7 +516,7 @@ export function WaveTeamDraw({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-5">
             <div className="text-sm text-gray-500">
-              <span className="text-2xl font-bold text-gray-900 leading-none">{attendingMemberIds.size}</span>
+              <span className="text-2xl font-bold text-gray-900 leading-none">{allAttending.length}</span>
               <span className="ml-1.5">attending</span>
             </div>
             <div className="w-px h-6 bg-gray-200" />
@@ -484,7 +558,178 @@ export function WaveTeamDraw({
           </div>
         </div>
 
-        {/* Build teams */}
+        {/* ── STEP 1: Set Capacity ── */}
+        {isTrainer && (
+          <div>
+            <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
+              Step 1 — Set Capacity
+            </h3>
+            <div className="flex flex-wrap items-end gap-3 mb-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Waves (1–{MAX_W})</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_W}
+                  value={waveInput}
+                  onChange={e => setWaveInput(e.target.value)}
+                  onBlur={() => {
+                    const v = Math.max(1, Math.min(MAX_W, parseInt(waveInput) || 1))
+                    setWaveInput(String(v))
+                  }}
+                  className="w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Lanes per wave (1–{MAX_L})</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_L}
+                  value={laneInput}
+                  onChange={e => setLaneInput(e.target.value)}
+                  onBlur={() => {
+                    const v = Math.max(1, Math.min(MAX_L, parseInt(laneInput) || 1))
+                    setLaneInput(String(v))
+                  }}
+                  className="w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                />
+              </div>
+              <button
+                onClick={applyCapacity}
+                className="flex items-center gap-2 px-5 py-2 bg-[#1e3a5f] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition"
+              >
+                Set Capacity
+              </button>
+            </div>
+
+            {/* Wave configuration presets */}
+            <div className="flex flex-wrap gap-2">
+              {PRESETS.map(([w, l]) => {
+                const slots = w * l
+                const empty = slots - teamCount
+                const isSelected = numWaves === w && numLanes === l
+                const isBestFit = autoW === w && autoL === l && !isSelected
+
+                let subLabel: string
+                let subColor: string
+                if (empty === 0) {
+                  subLabel = 'perfect fit'
+                  subColor = isSelected ? 'text-blue-200' : 'text-emerald-600 font-semibold'
+                } else if (empty > 0) {
+                  subLabel = `${slots} slots · ${empty} empty`
+                  subColor = isSelected ? 'text-blue-200' : 'text-gray-400'
+                } else {
+                  subLabel = `${slots} slots · ${-empty} over`
+                  subColor = isSelected ? 'text-red-200' : 'text-red-400'
+                }
+
+                return (
+                  <button
+                    key={`${w}-${l}`}
+                    onClick={() => {
+                      setNumWaves(w)
+                      setNumLanes(l)
+                      setWaveInput(String(w))
+                      setLaneInput(String(l))
+                    }}
+                    className={`relative px-3 py-2 rounded-xl border-2 text-left transition ${
+                      isSelected
+                        ? 'bg-[#1e3a5f] border-[#1e3a5f] text-white'
+                        : 'border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div className="text-xs font-semibold leading-snug whitespace-nowrap">
+                      {w}×{l}
+                    </div>
+                    <div className={`text-[10px] mt-0.5 whitespace-nowrap ${subColor}`}>
+                      {subLabel}
+                    </div>
+                    {isBestFit && (
+                      <span className="absolute -top-1.5 -right-1.5 text-[8px] font-bold text-emerald-700 bg-emerald-100 rounded px-1 py-0.5 leading-none border border-emerald-200">
+                        best
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ── STEP 2: Available Members ── */}
+        <div>
+          <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
+            Step 2 — Available Members
+          </h3>
+          {allAttending.length === 0 ? (
+            <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4 border border-dashed border-gray-200">
+              No members marked as attended yet. Mark attendance in the Attendance tab first.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              {/* Drivers column */}
+              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
+                <div className="text-xs font-semibold text-gray-500 mb-2">
+                  Drivers (IRB-D) — {drivers.length}
+                </div>
+                {drivers.length === 0 ? (
+                  <p className="text-xs text-gray-400">None present with IRB-D</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {drivers.map(m => {
+                      const assigned = assignedDriverIds.has(m.id)
+                      return (
+                        <span
+                          key={m.id}
+                          title={m.name}
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border transition ${
+                            assigned
+                              ? 'bg-gray-100 text-gray-300 border-gray-200 line-through'
+                              : 'bg-white text-blue-700 border-blue-200 shadow-sm'
+                          }`}
+                        >
+                          {memberFirstName(m)}
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              {/* Crew column */}
+              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
+                <div className="text-xs font-semibold text-gray-500 mb-2">
+                  Crew (IRB-C) — {crews.length}
+                </div>
+                {crews.length === 0 ? (
+                  <p className="text-xs text-gray-400">None present with IRB-C</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {crews.map(m => {
+                      const assigned = assignedCrewIds.has(m.id)
+                      return (
+                        <span
+                          key={m.id}
+                          title={m.name}
+                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border transition ${
+                            assigned
+                              ? 'bg-gray-100 text-gray-300 border-gray-200 line-through'
+                              : 'bg-white text-emerald-700 border-emerald-200 shadow-sm'
+                          }`}
+                        >
+                          {memberFirstName(m)}
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ── Build teams ── */}
         {isTrainer && (
           <div>
             <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
@@ -503,72 +748,25 @@ export function WaveTeamDraw({
               </button>
               <button
                 onClick={autoPair}
-                disabled={autopairing}
+                disabled={autopairing || allAttending.length === 0}
                 className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-gray-900 text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-60"
               >
                 <Zap size={15} />
                 {autopairing ? 'Pairing…' : 'Auto-pair'}
               </button>
             </div>
+            {allAttending.length === 0 && (
+              <p className="mt-2 text-xs text-gray-400">
+                Mark attendance first — auto-pair uses irb_attendance records.
+              </p>
+            )}
           </div>
         )}
 
-        {/* Wave configuration */}
+        {/* ── STEP 3: Wave Grid ── */}
         <div>
           <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-            Wave Configuration
-          </h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {PRESETS.map(([w, l]) => {
-              const slots = w * l
-              const empty = slots - teamCount
-              const isSelected = numWaves === w && numLanes === l
-              const isBestFit = autoW === w && autoL === l && !isSelected
-
-              let subLabel: string
-              let subColor: string
-              if (empty === 0) {
-                subLabel = 'perfect fit'
-                subColor = isSelected ? 'text-blue-200' : 'text-emerald-600 font-semibold'
-              } else if (empty > 0) {
-                subLabel = `${slots} slots · ${empty} empty`
-                subColor = isSelected ? 'text-blue-200' : 'text-gray-400'
-              } else {
-                subLabel = `${slots} slots · ${-empty} over`
-                subColor = isSelected ? 'text-red-200' : 'text-red-400'
-              }
-
-              return (
-                <button
-                  key={`${w}-${l}`}
-                  onClick={() => { setNumWaves(w); setNumLanes(l) }}
-                  className={`relative px-3 py-3 rounded-xl border-2 text-left transition ${
-                    isSelected
-                      ? 'bg-[#1e3a5f] border-[#1e3a5f] text-white'
-                      : 'border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                  }`}
-                >
-                  <div className="text-sm font-semibold leading-snug">
-                    {w} wave{w !== 1 ? 's' : ''} × {l} lane{l !== 1 ? 's' : ''}
-                  </div>
-                  <div className={`text-xs mt-0.5 ${subColor}`}>
-                    {subLabel}
-                  </div>
-                  {isBestFit && (
-                    <span className="absolute top-1.5 right-1.5 text-[9px] font-bold text-emerald-700 bg-emerald-100 rounded px-1 py-0.5 leading-none">
-                      best fit
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Wave grid */}
-        <div>
-          <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-            Wave Grid
+            Step 3 — Wave Grid
           </h3>
           <div className="space-y-6">
             {Array.from({ length: numWaves }, (_, wi) => {
@@ -583,41 +781,80 @@ export function WaveTeamDraw({
                       const lane = li + 1
                       const key = `${wave}-${lane}`
                       const cell = cells[key]
-                      const driverName = cell?.driver_id ? memberName(cell.driver_id) : null
-                      const crewName = cell?.crew_id ? memberName(cell.crew_id) : null
-                      const hasTeam = Boolean(driverName || crewName)
                       const isSaved = savedKeys.has(key)
 
                       return (
                         <div
                           key={key}
-                          onClick={() => openEdit(wave, lane)}
-                          className={`flex items-center gap-3 px-4 py-3 rounded-xl border transition ${
-                            isTrainer
-                              ? 'cursor-pointer hover:border-gray-300 hover:bg-gray-50 active:bg-gray-100'
-                              : ''
-                          } ${
-                            hasTeam
-                              ? 'border-gray-200 bg-white'
-                              : 'border-dashed border-gray-200 bg-gray-50/40'
-                          }`}
+                          className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-white"
                         >
                           <span className="text-xs font-bold text-gray-400 w-6 flex-shrink-0 tabular-nums">
                             L{lane}
                           </span>
-                          <span className={`text-sm flex-1 ${hasTeam ? 'text-gray-900 font-medium' : 'text-gray-300'}`}>
-                            {hasTeam ? [driverName, crewName].filter(Boolean).join(' + ') : '—'}
-                          </span>
-                          {isSaved && (
-                            <span className="text-[10px] font-semibold text-emerald-500 flex-shrink-0">
-                              ✓ Saved
-                            </span>
-                          )}
-                          {isTrainer && !isSaved && hasTeam && (
-                            <span className="text-xs text-gray-300 flex-shrink-0 hidden sm:block">
-                              edit
-                            </span>
-                          )}
+
+                          {/* Driver select */}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[9px] font-semibold text-gray-400 uppercase mb-0.5">Driver</div>
+                            {isTrainer ? (
+                              <select
+                                value={cell?.driver_id ?? ''}
+                                onChange={e => assignSlotField(wave, lane, 'driver_id', e.target.value)}
+                                className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-gray-900"
+                              >
+                                <option value="">+ Driver</option>
+                                {drivers.map(m => (
+                                  <option key={m.id} value={m.id}>{m.name}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className={`text-sm ${cell?.driver_id ? 'text-gray-900 font-medium' : 'text-gray-300'}`}>
+                                {cell?.driver_id
+                                  ? (allMembers.find(m => m.id === cell.driver_id)?.name ?? '—')
+                                  : '—'}
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="w-px h-8 bg-gray-100 flex-shrink-0" />
+
+                          {/* Crew select */}
+                          <div className="flex-1 min-w-0">
+                            <div className="text-[9px] font-semibold text-gray-400 uppercase mb-0.5">Crew</div>
+                            {isTrainer ? (
+                              <select
+                                value={cell?.crew_id ?? ''}
+                                onChange={e => assignSlotField(wave, lane, 'crew_id', e.target.value)}
+                                className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-gray-900"
+                              >
+                                <option value="">+ Crew</option>
+                                {crews.map(m => (
+                                  <option key={m.id} value={m.id}>{m.name}</option>
+                                ))}
+                              </select>
+                            ) : (
+                              <span className={`text-sm ${cell?.crew_id ? 'text-gray-900 font-medium' : 'text-gray-300'}`}>
+                                {cell?.crew_id
+                                  ? (allMembers.find(m => m.id === cell.crew_id)?.name ?? '—')
+                                  : '—'}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Saved indicator + details button */}
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {isSaved && (
+                              <span className="text-[10px] font-semibold text-emerald-500">✓</span>
+                            )}
+                            {isTrainer && (
+                              <button
+                                onClick={() => openEdit(wave, lane)}
+                                title="Edit boat / patient / notes"
+                                className="p-1.5 text-gray-300 hover:text-gray-500 rounded-lg hover:bg-gray-100 transition"
+                              >
+                                <Settings2 size={13} />
+                              </button>
+                            )}
+                          </div>
                         </div>
                       )
                     })}
@@ -640,14 +877,14 @@ export function WaveTeamDraw({
         </div>
       </div>
 
-      {/* ── Edit team modal ── */}
+      {/* ── Edit modal (boat / patient / notes) ── */}
       {editModal && editData && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/40">
           <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden">
             <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
               <div>
                 <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest">
-                  Edit Team
+                  Edit Team — Extra Details
                 </div>
                 <div className="text-base font-bold text-gray-900 mt-0.5">
                   Wave {editModal.wave} · Lane {editModal.lane}
@@ -704,16 +941,14 @@ export function WaveTeamDraw({
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
                   <option value="">— None —</option>
-                  {attendingMembers.map(m => (
+                  {allAttending.map(m => (
                     <option key={m.id} value={m.id}>{m.name}</option>
                   ))}
                 </select>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">
-                  Boat
-                </label>
+                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Boat</label>
                 <select
                   value={editData.boat_id}
                   onChange={e => setEditData(d => d ? { ...d, boat_id: e.target.value } : d)}
@@ -887,25 +1122,18 @@ export function WaveTeamDraw({
                 const cell = cells[`${wave}-${lane}`]
                 return (
                   <tr key={`${wave}-${lane}`}>
-                    <td
-                      style={{
-                        border: '1px solid #000',
-                        padding: '6px 8px',
-                        fontWeight: li === 0 ? 700 : 400,
-                        color: li === 0 ? '#000' : '#999',
-                      }}
-                    >
+                    <td style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: li === 0 ? 700 : 400, color: li === 0 ? '#000' : '#999' }}>
                       {li === 0 ? `Wave ${wave}` : ''}
                     </td>
                     <td style={{ border: '1px solid #000', padding: '6px 8px' }}>L{lane}</td>
                     <td style={{ border: '1px solid #000', padding: '6px 8px' }}>
-                      {cell?.driver_id ? memberName(cell.driver_id) : '—'}
+                      {cell?.driver_id ? (allMembers.find(m => m.id === cell.driver_id)?.name ?? '—') : '—'}
                     </td>
                     <td style={{ border: '1px solid #000', padding: '6px 8px' }}>
-                      {cell?.crew_id ? memberName(cell.crew_id) : '—'}
+                      {cell?.crew_id ? (allMembers.find(m => m.id === cell.crew_id)?.name ?? '—') : '—'}
                     </td>
                     <td style={{ border: '1px solid #000', padding: '6px 8px' }}>
-                      {cell?.patient_id ? memberName(cell.patient_id) : ''}
+                      {cell?.patient_id ? (allMembers.find(m => m.id === cell.patient_id)?.name ?? '') : ''}
                     </td>
                     <td style={{ border: '1px solid #000', padding: '6px 8px', fontStyle: 'italic', color: '#555' }}>
                       {cell?.notes ?? ''}
