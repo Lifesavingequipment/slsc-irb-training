@@ -80,12 +80,16 @@ export function WaveTeamDraw({ sessionId, clubId, clubName, sessionTitle, sessio
       ? supabase.from('roles').select('role_name').eq('member_id', currentMember.id).eq('club_id', clubId).eq('is_active', true)
       : Promise.resolve({ data: [] as { role_name: string }[], error: null })
 
-    const [membersRes, attendanceRes, dRes, cRes, teamsRes, configRes, partnersRes, rolesRes] =
+    const [membersRes, attendanceRes, qualsRes, teamsRes, configRes, partnersRes, rolesRes] =
       await Promise.all([
         supabase.from('members').select('id, first_name, last_name, preferred_name').eq('club_id', clubId),
         supabase.from('irb_attendance').select('member_id').eq('session_id', sessionId).eq('club_id', clubId).eq('attended', true),
-        supabase.from('member_qualifications').select('member_id, qualifications!inner(code)').eq('club_id', clubId).eq('status', 'current').eq('qualifications.code', 'IRB-D'),
-        supabase.from('member_qualifications').select('member_id, qualifications!inner(code)').eq('club_id', clubId).eq('status', 'current').eq('qualifications.code', 'IRB-C'),
+        // Single query for both IRB-D and IRB-C — filter by code client-side to avoid
+        // unreliable cross-table .eq() filter on embedded PostgREST resources
+        supabase.from('member_qualifications')
+          .select('member_id, qualifications!inner(code)')
+          .eq('club_id', clubId)
+          .eq('status', 'current'),
         supabase.from('irb_session_teams').select('id, driver_id, crew_id, wave_number, lane_number').eq('session_id', sessionId).eq('club_id', clubId),
         supabase.from('irb_session_draw_configs').select('id, waves_count, lanes_count').eq('session_id', sessionId).eq('club_id', clubId).maybeSingle(),
         supabase.from('irb_member_partners').select('driver_id, crew_id').eq('club_id', clubId),
@@ -103,8 +107,12 @@ export function WaveTeamDraw({ sessionId, clubId, clubName, sessionTitle, sessio
     const attendedIds = new Set((attendanceRes.data ?? []).map((a: any) => a.member_id as string))
     setAllAttending(memberList.filter(m => attendedIds.has(m.id)))
 
-    setDriverIds(new Set((dRes.data ?? []).map((r: any) => r.member_id as string)))
-    setCrewIds(new Set((cRes.data ?? []).map((r: any) => r.member_id as string)))
+    const allQuals: { member_id: string; qualifications: { code: string } }[] = qualsRes.data ?? []
+    const newDriverIds = new Set(allQuals.filter(r => r.qualifications?.code === 'IRB-D').map(r => r.member_id))
+    const newCrewIds = new Set(allQuals.filter(r => r.qualifications?.code === 'IRB-C').map(r => r.member_id))
+    console.log(`[WaveTeamDraw] quals loaded: ${allQuals.length} rows | drivers (IRB-D): ${newDriverIds.size} | crew (IRB-C): ${newCrewIds.size}`)
+    setDriverIds(newDriverIds)
+    setCrewIds(newCrewIds)
 
     setTeams(
       (teamsRes.data ?? []).map((t: any) => ({
