@@ -1,30 +1,27 @@
-import { useEffect, useState, useRef } from 'react'
-import { Printer, Trash2, Copy, Zap, Users, X, Settings2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Copy, Trash2, Users, Zap, Lock, X, AlertTriangle } from 'lucide-react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../context/AuthContext'
 
 interface MemberOption {
   id: string
-  name: string       // full name for dropdowns / print
-  firstName: string  // first name for availability chips
-}
-
-interface BoatOption {
-  id: string
   name: string
-  identifier: string | null
+  firstName: string
 }
 
-interface CellData {
-  dbId: string | null
-  boat_id: string
+interface Team {
+  id: string
   driver_id: string
   crew_id: string
-  patient_id: string
-  notes: string
+  wave_number: number | null
+  lane_number: number | null
 }
 
-type CellKey = string
+interface DrawConfig {
+  id: string
+  waves_count: number
+  lanes_count: number
+}
 
 interface Props {
   sessionId: string
@@ -35,457 +32,358 @@ interface Props {
   attendingMemberIds: Set<string> // kept for prop compat — draw uses irb_attendance directly
 }
 
-const EMPTY_CELL: CellData = {
-  dbId: null, boat_id: '', driver_id: '', crew_id: '', patient_id: '', notes: '',
-}
-
-const MAX_W = 10
-const MAX_L = 10
-
-// Presets: common wave×lane combos up to 10×10
-const PRESETS: [number, number][] = [
-  [1, 1], [1, 2], [1, 3], [1, 4], [1, 5],
-  [2, 2], [2, 3], [2, 4], [2, 5],
-  [3, 3], [3, 4], [3, 5],
-  [4, 4], [4, 5],
-  [5, 5], [5, 6],
-  [6, 6], [6, 8],
-  [8, 8], [10, 5], [10, 10],
-]
-
-function memberFirstName(m: MemberOption) {
-  return m.firstName || m.name.split(' ')[0] || m.name
-}
-
-function boatLabel(b: BoatOption) {
-  return b.identifier ? `${b.name} (${b.identifier})` : b.name
-}
-
-function formatDateForPrint(date: string) {
+function formatDate(date: string) {
   return new Date(date + 'T00:00:00').toLocaleDateString('en-AU', {
     weekday: 'long', day: 'numeric', month: 'long', year: 'numeric',
   })
 }
 
-function findBestPreset(count: number): [number, number] {
-  let best: [number, number] = [1, 2]
-  let bestEmpty = Infinity
-  for (const [w, l] of PRESETS) {
-    const slots = w * l
-    const empty = slots - count
-    if (empty >= 0 && empty < bestEmpty) {
-      bestEmpty = empty
-      best = [w, l]
-    }
-  }
-  return best
+function memberName(id: string, members: MemberOption[]) {
+  return members.find(m => m.id === id)?.name ?? '—'
 }
 
-export function WaveTeamDraw({
-  sessionId,
-  clubId,
-  clubName,
-  sessionTitle,
-  sessionDate,
-}: Props) {
+function memberFirst(id: string, members: MemberOption[]) {
+  return members.find(m => m.id === id)?.firstName ?? '?'
+}
+
+export function WaveTeamDraw({ sessionId, clubId, clubName, sessionTitle, sessionDate }: Props) {
   const { member: currentMember } = useAuth()
 
-  // ── Capacity inputs ──
-  const [numWaves, setNumWaves] = useState(1)
-  const [numLanes, setNumLanes] = useState(2)
-  const [waveInput, setWaveInput] = useState('1')
-  const [laneInput, setLaneInput] = useState('2')
+  const [isTrainer, setIsTrainer] = useState(false)
+  const [loading, setLoading] = useState(true)
 
-  // ── Data ──
-  const [cells, setCells] = useState<Record<CellKey, CellData>>({})
-  const [savedKeys, setSavedKeys] = useState<Set<CellKey>>(new Set())
-  const [boats, setBoats] = useState<BoatOption[]>([])
-  const [drivers, setDrivers] = useState<MemberOption[]>([])
-  const [crews, setCrews] = useState<MemberOption[]>([])
   const [allAttending, setAllAttending] = useState<MemberOption[]>([])
   const [allMembers, setAllMembers] = useState<MemberOption[]>([])
-  const [loadingData, setLoadingData] = useState(true)
-  const [clearing, setClearing] = useState(false)
-  const [isTrainer, setIsTrainer] = useState(false)
-  const [autopairing, setAutopairing] = useState(false)
+  const [driverIds, setDriverIds] = useState<Set<string>>(new Set())
+  const [crewIds, setCrewIds] = useState<Set<string>>(new Set())
+
+  const [teams, setTeams] = useState<Team[]>([])
+  const [drawConfig, setDrawConfig] = useState<DrawConfig | null>(null)
+  const [partners, setPartners] = useState<{ driver_id: string; crew_id: string }[]>([])
+
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null)
   const [shareToast, setShareToast] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [building, setBuilding] = useState(false)
 
-  // ── Modals ──
-  const [editModal, setEditModal] = useState<{ wave: number; lane: number } | null>(null)
-  const [editData, setEditData] = useState<CellData | null>(null)
+  // Pair dialog state
+  const [pairTarget, setPairTarget] = useState<string | null>(null)
+  const [pairWith, setPairWith] = useState<string>('')
+  const [pairRole, setPairRole] = useState<'driver' | 'crew'>('driver')
 
-  const [pairsModal, setPairsModal] = useState(false)
-  const [pendingPairs, setPendingPairs] = useState<{ driver_id: string; crew_id: string }[]>([
-    { driver_id: '', crew_id: '' },
-  ])
-  const [creatingPairs, setCreatingPairs] = useState(false)
+  useEffect(() => { loadAll() }, [sessionId, clubId])
 
-  const savedTimers = useRef<Record<CellKey, ReturnType<typeof setTimeout>>>({})
+  async function loadAll() {
+    setLoading(true)
 
-  useEffect(() => {
-    loadData()
-  }, [sessionId, clubId])
-
-  // Keep numeric state in sync with text inputs
-  function applyCapacity() {
-    const w = Math.max(1, Math.min(MAX_W, parseInt(waveInput) || 1))
-    const l = Math.max(1, Math.min(MAX_L, parseInt(laneInput) || 1))
-    setNumWaves(w)
-    setNumLanes(l)
-    setWaveInput(String(w))
-    setLaneInput(String(l))
-  }
-
-  async function loadData() {
-    setLoadingData(true)
-
-    const rolesQuery = currentMember
-      ? supabase
-          .from('member_roles')
-          .select('role_name')
-          .eq('member_id', currentMember.id)
-          .eq('club_id', clubId)
-          .eq('is_active', true)
+    const rolesQ = currentMember
+      ? supabase.from('roles').select('role_name').eq('member_id', currentMember.id).eq('club_id', clubId).eq('is_active', true)
       : Promise.resolve({ data: [] as { role_name: string }[], error: null })
 
-    const [boatsRes, irbDRes, irbCRes, membersRes, teamsRes, rolesRes, attendanceRes] =
+    const [membersRes, attendanceRes, dRes, cRes, teamsRes, configRes, partnersRes, rolesRes] =
       await Promise.all([
-        supabase
-          .from('irb_equipment')
-          .select('id, name, identifier')
-          .eq('club_id', clubId)
-          .eq('equipment_type', 'boat')
-          .eq('status', 'operational'),
-        supabase
-          .from('member_qualifications')
-          .select('member_id, qualifications!inner(code)')
-          .eq('club_id', clubId)
-          .eq('status', 'current')
-          .eq('qualifications.code', 'IRB-D'),
-        supabase
-          .from('member_qualifications')
-          .select('member_id, qualifications!inner(code)')
-          .eq('club_id', clubId)
-          .eq('status', 'current')
-          .eq('qualifications.code', 'IRB-C'),
-        supabase
-          .from('members')
-          .select('id, first_name, last_name, preferred_name')
-          .eq('club_id', clubId),
-        supabase
-          .from('irb_session_teams')
-          .select('*')
-          .eq('session_id', sessionId)
-          .eq('club_id', clubId),
-        rolesQuery,
-        // ── KEY FIX: use irb_attendance instead of RSVPs ──
-        supabase
-          .from('irb_attendance')
-          .select('member_id')
-          .eq('session_id', sessionId)
-          .eq('club_id', clubId)
-          .eq('attended', true),
+        supabase.from('members').select('id, first_name, last_name, preferred_name').eq('club_id', clubId),
+        supabase.from('irb_attendance').select('member_id').eq('session_id', sessionId).eq('club_id', clubId).eq('attended', true),
+        supabase.from('member_qualifications').select('member_id, qualifications!inner(code)').eq('club_id', clubId).eq('status', 'current').eq('qualifications.code', 'IRB-D'),
+        supabase.from('member_qualifications').select('member_id, qualifications!inner(code)').eq('club_id', clubId).eq('status', 'current').eq('qualifications.code', 'IRB-C'),
+        supabase.from('irb_session_teams').select('id, driver_id, crew_id, wave_number, lane_number').eq('session_id', sessionId).eq('club_id', clubId),
+        supabase.from('irb_session_draw_configs').select('id, waves_count, lanes_count').eq('session_id', sessionId).eq('club_id', clubId).maybeSingle(),
+        supabase.from('irb_member_partners').select('driver_id, crew_id').eq('club_id', clubId),
+        rolesQ,
       ])
 
-    setBoats(
-      (boatsRes.data ?? []).map((b: any) => ({
-        id: b.id, name: b.name, identifier: b.identifier,
+    const memberList: MemberOption[] = (membersRes.data ?? []).map((m: any) => {
+      const display = m.preferred_name
+        ? `${m.preferred_name} ${m.last_name}`
+        : `${m.first_name} ${m.last_name}`
+      return { id: m.id, name: display, firstName: m.preferred_name || m.first_name || display.split(' ')[0] }
+    })
+    setAllMembers(memberList)
+
+    const attendedIds = new Set((attendanceRes.data ?? []).map((a: any) => a.member_id as string))
+    setAllAttending(memberList.filter(m => attendedIds.has(m.id)))
+
+    setDriverIds(new Set((dRes.data ?? []).map((r: any) => r.member_id as string)))
+    setCrewIds(new Set((cRes.data ?? []).map((r: any) => r.member_id as string)))
+
+    setTeams(
+      (teamsRes.data ?? []).map((t: any) => ({
+        id: t.id,
+        driver_id: t.driver_id ?? '',
+        crew_id: t.crew_id ?? '',
+        wave_number: t.wave_number ?? null,
+        lane_number: t.lane_number ?? null,
       }))
+    )
+
+    const cfg = (configRes as any).data
+    setDrawConfig(cfg ? { id: cfg.id, waves_count: cfg.waves_count, lanes_count: cfg.lanes_count } : null)
+
+    setPartners(
+      (partnersRes.data ?? []).map((p: any) => ({ driver_id: p.driver_id, crew_id: p.crew_id }))
     )
 
     const roles = ((rolesRes as any).data ?? []).map((r: any) => r.role_name as string)
     setIsTrainer(roles.includes('irb_trainer') || roles.includes('club_admin'))
 
-    const driverIdSet = new Set(
-      (irbDRes.data ?? []).map((r: any) => r.member_id as string)
-    )
-    const crewIdSet = new Set(
-      (irbCRes.data ?? []).map((r: any) => r.member_id as string)
-    )
-
-    // Build member options with first-name extraction
-    const memberList: MemberOption[] = (membersRes.data ?? []).map((m: any) => {
-      const displayName = m.preferred_name
-        ? `${m.preferred_name} ${m.last_name}`
-        : `${m.first_name} ${m.last_name}`
-      const firstName = m.preferred_name || m.first_name || displayName.split(' ')[0]
-      return { id: m.id, name: displayName, firstName }
-    })
-    setAllMembers(memberList)
-
-    // Members who attended this session (irb_attendance.attended = true)
-    const attendedIds = new Set(
-      (attendanceRes.data ?? []).map((a: any) => a.member_id as string)
-    )
-    const attendingList = memberList.filter(m => attendedIds.has(m.id))
-    setAllAttending(attendingList)
-    setDrivers(attendingList.filter(m => driverIdSet.has(m.id)))
-    setCrews(attendingList.filter(m => crewIdSet.has(m.id)))
-
-    // Restore existing draw
-    const teams: any[] = teamsRes.data ?? []
-    if (teams.length > 0) {
-      const cellMap: Record<CellKey, CellData> = {}
-      let maxWave = 0
-      let maxLane = 0
-      for (const t of teams) {
-        const w = t.wave_number ?? 1
-        const l = t.lane_number ?? 1
-        maxWave = Math.max(maxWave, w)
-        maxLane = Math.max(maxLane, l)
-        cellMap[`${w}-${l}`] = {
-          dbId: t.id,
-          boat_id: t.boat_id ?? '',
-          driver_id: t.driver_id ?? '',
-          crew_id: t.crew_id ?? '',
-          patient_id: t.patient_id ?? '',
-          notes: t.notes ?? '',
-        }
-      }
-      const w = Math.max(maxWave, 1)
-      const l = Math.max(maxLane, 1)
-      setNumWaves(w)
-      setNumLanes(l)
-      setWaveInput(String(w))
-      setLaneInput(String(l))
-      setCells(cellMap)
-    }
-
-    setLoadingData(false)
+    setLoading(false)
   }
 
-  // ── Save helpers ──
-  async function performSave(key: CellKey, wave: number, lane: number, data: CellData) {
-    const payload = {
-      club_id: clubId,
-      session_id: sessionId,
-      wave_number: wave,
-      lane_number: lane,
-      boat_id: data.boat_id || null,
-      driver_id: data.driver_id || null,
-      crew_id: data.crew_id || null,
-      patient_id: data.patient_id || null,
-      notes: data.notes || null,
-    }
-    if (data.dbId) {
-      await supabase.from('irb_session_teams').update(payload).eq('id', data.dbId)
-    } else {
-      const { data: inserted } = await supabase
-        .from('irb_session_teams')
-        .insert(payload)
-        .select()
-        .single()
-      if (inserted) {
-        setCells(prev => ({ ...prev, [key]: { ...prev[key], dbId: inserted.id } }))
+  // ── Derived ──
+  const benchTeams = teams.filter(t => t.wave_number == null)
+  const gridTeams = teams.filter(t => t.wave_number != null)
+  const teamCount = teams.length
+
+  const membersInTeams = new Set(teams.flatMap(t => [t.driver_id, t.crew_id].filter(Boolean)))
+  const unpartnered = allAttending.filter(m => !membersInTeams.has(m.id))
+
+  const gridMap = new Map<string, Team>()
+  for (const t of gridTeams) {
+    gridMap.set(`${t.wave_number}-${t.lane_number}`, t)
+  }
+
+  // Wave × lane options: all combos from 1×1 to 10×10 where slots is between teamCount and teamCount+10
+  const waveOptions: { waves: number; lanes: number; slots: number }[] = []
+  for (let w = 1; w <= 10; w++) {
+    for (let l = 1; l <= 10; l++) {
+      const slots = w * l
+      if (slots >= teamCount && slots <= teamCount + 10) {
+        waveOptions.push({ waves: w, lanes: l, slots })
       }
     }
-    setSavedKeys(prev => new Set([...prev, key]))
-    if (savedTimers.current[key]) clearTimeout(savedTimers.current[key])
-    savedTimers.current[key] = setTimeout(() => {
-      setSavedKeys(prev => {
-        const next = new Set(prev)
-        next.delete(key)
-        return next
-      })
-    }, 2000)
   }
-
-  // Inline slot assignment — auto-saves immediately
-  async function assignSlotField(
-    wave: number,
-    lane: number,
-    field: 'driver_id' | 'crew_id',
-    value: string,
-  ) {
-    const key: CellKey = `${wave}-${lane}`
-    const existing = cells[key] ?? { ...EMPTY_CELL }
-    const updated = { ...existing, [field]: value }
-    setCells(prev => ({ ...prev, [key]: updated }))
-    await performSave(key, wave, lane, updated)
+  // Always include current config even if outside range
+  if (drawConfig) {
+    const exists = waveOptions.some(o => o.waves === drawConfig.waves_count && o.lanes === drawConfig.lanes_count)
+    if (!exists) {
+      waveOptions.unshift({ waves: drawConfig.waves_count, lanes: drawConfig.lanes_count, slots: drawConfig.waves_count * drawConfig.lanes_count })
+    }
   }
+  waveOptions.sort((a, b) => a.slots - b.slots || a.waves - b.waves)
 
-  // ── Clear ──
-  async function clearDraw() {
-    if (!confirm('Remove all team assignments for this session? This cannot be undone.')) return
+  const selectedTeam = teams.find(t => t.id === selectedTeamId) ?? null
+
+  // ── Actions ──
+
+  async function clearAll() {
+    if (!confirm('Remove all teams and the wave draw for this session? This cannot be undone.')) return
     setClearing(true)
-    await supabase
-      .from('irb_session_teams')
-      .delete()
-      .eq('session_id', sessionId)
-      .eq('club_id', clubId)
-    setCells({})
+    await supabase.from('irb_session_teams').delete().eq('session_id', sessionId).eq('club_id', clubId)
+    if (drawConfig) {
+      await supabase.from('irb_session_draw_configs').delete().eq('session_id', sessionId).eq('club_id', clubId)
+    }
+    setTeams([])
+    setDrawConfig(null)
+    setSelectedTeamId(null)
     setClearing(false)
   }
 
-  // ── Auto-pair ──
-  async function autoPair() {
-    setAutopairing(true)
-    await supabase
-      .from('irb_session_teams')
-      .delete()
-      .eq('session_id', sessionId)
-      .eq('club_id', clubId)
+  async function buildConfirmedPairs() {
+    setBuilding(true)
+    // Clear existing teams and config
+    await supabase.from('irb_session_teams').delete().eq('session_id', sessionId).eq('club_id', clubId)
+    if (drawConfig) {
+      await supabase.from('irb_session_draw_configs').delete().eq('session_id', sessionId).eq('club_id', clubId)
+      setDrawConfig(null)
+    }
 
-    const pairs: { driver_id: string; crew_id: string }[] = []
-    const usedCrews = new Set<string>()
-    for (const d of drivers) {
-      const c = crews.find(cr => !usedCrews.has(cr.id) && cr.id !== d.id)
+    const attendedIds = new Set(allAttending.map(m => m.id))
+    const validPairs = partners.filter(p => attendedIds.has(p.driver_id) && attendedIds.has(p.crew_id))
+    if (validPairs.length === 0) { setTeams([]); setBuilding(false); return }
+
+    const inserts = validPairs.map(p => ({
+      club_id: clubId, session_id: sessionId,
+      driver_id: p.driver_id || null, crew_id: p.crew_id || null,
+      wave_number: null, lane_number: null,
+      boat_id: null, patient_id: null, notes: null,
+    }))
+    const { data } = await supabase.from('irb_session_teams').insert(inserts).select('id, driver_id, crew_id, wave_number, lane_number')
+    setTeams(
+      (data ?? []).map((t: any) => ({ id: t.id, driver_id: t.driver_id ?? '', crew_id: t.crew_id ?? '', wave_number: null, lane_number: null }))
+    )
+    setSelectedTeamId(null)
+    setBuilding(false)
+  }
+
+  async function buildAutoPair() {
+    setBuilding(true)
+    await supabase.from('irb_session_teams').delete().eq('session_id', sessionId).eq('club_id', clubId)
+    if (drawConfig) {
+      await supabase.from('irb_session_draw_configs').delete().eq('session_id', sessionId).eq('club_id', clubId)
+      setDrawConfig(null)
+    }
+
+    const attendedIds = new Set(allAttending.map(m => m.id))
+
+    // Step 1: confirmed pairs from saved partners where both attending
+    const confirmedPairs: { driver_id: string; crew_id: string }[] = partners.filter(
+      p => attendedIds.has(p.driver_id) && attendedIds.has(p.crew_id)
+    )
+    const usedIds = new Set(confirmedPairs.flatMap(p => [p.driver_id, p.crew_id]))
+
+    // Step 2: pair remaining by qualification — drivers (IRB-D) with crew (IRB-C)
+    const remainingDrivers = allAttending.filter(m => driverIds.has(m.id) && !usedIds.has(m.id))
+    const remainingCrews = allAttending.filter(m => crewIds.has(m.id) && !usedIds.has(m.id))
+    const usedCrewIds = new Set<string>()
+    const autoPairs: { driver_id: string; crew_id: string }[] = []
+
+    for (const d of remainingDrivers) {
+      const c = remainingCrews.find(cr => !usedCrewIds.has(cr.id) && cr.id !== d.id)
       if (c) {
-        pairs.push({ driver_id: d.id, crew_id: c.id })
-        usedCrews.add(c.id)
+        autoPairs.push({ driver_id: d.id, crew_id: c.id })
+        usedCrewIds.add(c.id)
+        usedIds.add(d.id)
+        usedIds.add(c.id)
       } else {
-        pairs.push({ driver_id: d.id, crew_id: '' })
+        autoPairs.push({ driver_id: d.id, crew_id: '' })
+        usedIds.add(d.id)
       }
     }
-    // Any crew left over without a driver
-    const usedDriverIds = new Set(pairs.map(p => p.driver_id))
-    for (const c of crews) {
-      if (!usedCrews.has(c.id) && !usedDriverIds.has(c.id)) {
-        pairs.push({ driver_id: '', crew_id: c.id })
+    for (const c of remainingCrews) {
+      if (!usedCrewIds.has(c.id)) {
+        autoPairs.push({ driver_id: '', crew_id: c.id })
+        usedIds.add(c.id)
+      }
+    }
+    // Step 3: pair remaining unqualified members together by attendance order
+    const others = allAttending.filter(m => !usedIds.has(m.id))
+    for (let i = 0; i < others.length; i += 2) {
+      if (i + 1 < others.length) {
+        autoPairs.push({ driver_id: others[i].id, crew_id: others[i + 1].id })
+      } else {
+        autoPairs.push({ driver_id: others[i].id, crew_id: '' })
       }
     }
 
-    const [bestW, bestL] = findBestPreset(pairs.length)
-    setNumWaves(bestW)
-    setNumLanes(bestL)
-    setWaveInput(String(bestW))
-    setLaneInput(String(bestL))
+    const allPairs = [...confirmedPairs, ...autoPairs]
+    if (allPairs.length === 0) { setTeams([]); setBuilding(false); return }
 
-    const newCells: Record<CellKey, CellData> = {}
-    for (let i = 0; i < pairs.length; i++) {
-      const wave = Math.floor(i / bestL) + 1
-      const lane = (i % bestL) + 1
-      const key = `${wave}-${lane}`
-      const payload = {
-        club_id: clubId,
-        session_id: sessionId,
-        wave_number: wave,
-        lane_number: lane,
-        driver_id: pairs[i].driver_id || null,
-        crew_id: pairs[i].crew_id || null,
-        boat_id: null,
-        patient_id: null,
-        notes: null,
-      }
-      const { data: inserted } = await supabase
-        .from('irb_session_teams')
-        .insert(payload)
+    const inserts = allPairs.map(p => ({
+      club_id: clubId, session_id: sessionId,
+      driver_id: p.driver_id || null, crew_id: p.crew_id || null,
+      wave_number: null, lane_number: null,
+      boat_id: null, patient_id: null, notes: null,
+    }))
+    const { data } = await supabase.from('irb_session_teams').insert(inserts).select('id, driver_id, crew_id, wave_number, lane_number')
+    setTeams(
+      (data ?? []).map((t: any) => ({ id: t.id, driver_id: t.driver_id ?? '', crew_id: t.crew_id ?? '', wave_number: null, lane_number: null }))
+    )
+    setSelectedTeamId(null)
+    setBuilding(false)
+  }
+
+  async function selectConfig(waves: number, lanes: number) {
+    if (!isTrainer) return
+    let cfg: DrawConfig
+    if (drawConfig) {
+      const { data } = await supabase
+        .from('irb_session_draw_configs')
+        .update({ waves_count: waves, lanes_count: lanes })
+        .eq('id', drawConfig.id)
         .select()
         .single()
-      newCells[key] = {
-        dbId: inserted?.id ?? null,
-        boat_id: '',
-        driver_id: pairs[i].driver_id,
-        crew_id: pairs[i].crew_id,
-        patient_id: '',
-        notes: '',
-      }
+      cfg = { id: data.id, waves_count: data.waves_count, lanes_count: data.lanes_count }
+    } else {
+      const { data } = await supabase
+        .from('irb_session_draw_configs')
+        .insert({ club_id: clubId, session_id: sessionId, waves_count: waves, lanes_count: lanes })
+        .select()
+        .single()
+      cfg = { id: data.id, waves_count: data.waves_count, lanes_count: data.lanes_count }
     }
-    setCells(newCells)
-    setAutopairing(false)
-  }
+    setDrawConfig(cfg)
 
-  // ── Confirmed pairs modal ──
-  async function createConfirmedPairs() {
-    const validPairs = pendingPairs.filter(p => p.driver_id || p.crew_id)
-    if (validPairs.length === 0) return
-    setCreatingPairs(true)
-
-    const teamCount = Object.values(cells).filter(c => c.driver_id || c.crew_id).length
-    const totalNeeded = teamCount + validPairs.length
-    const [bestW, bestL] = findBestPreset(totalNeeded)
-    setNumWaves(bestW)
-    setNumLanes(bestL)
-    setWaveInput(String(bestW))
-    setLaneInput(String(bestL))
-
-    const newCells = { ...cells }
-    let slotIndex = 0
-    for (const pair of validPairs) {
-      while (slotIndex < bestW * bestL) {
-        const wave = Math.floor(slotIndex / bestL) + 1
-        const lane = (slotIndex % bestL) + 1
-        const key = `${wave}-${lane}`
-        if (!newCells[key]?.driver_id && !newCells[key]?.crew_id) {
-          const payload = {
-            club_id: clubId,
-            session_id: sessionId,
-            wave_number: wave,
-            lane_number: lane,
-            driver_id: pair.driver_id || null,
-            crew_id: pair.crew_id || null,
-            boat_id: null,
-            patient_id: null,
-            notes: null,
-          }
-          const { data: inserted } = await supabase
-            .from('irb_session_teams')
-            .insert(payload)
-            .select()
-            .single()
-          newCells[key] = {
-            dbId: inserted?.id ?? null,
-            boat_id: '',
-            driver_id: pair.driver_id,
-            crew_id: pair.crew_id,
-            patient_id: '',
-            notes: '',
-          }
-          slotIndex++
-          break
-        }
-        slotIndex++
-      }
+    // Move placed teams that are now outside the new grid back to bench
+    const outOfBounds = teams.filter(
+      t => t.wave_number != null && (t.wave_number > waves || t.lane_number! > lanes)
+    )
+    if (outOfBounds.length > 0) {
+      await Promise.all(
+        outOfBounds.map(t =>
+          supabase.from('irb_session_teams').update({ wave_number: null, lane_number: null }).eq('id', t.id)
+        )
+      )
+      setTeams(prev =>
+        prev.map(t =>
+          outOfBounds.find(o => o.id === t.id) ? { ...t, wave_number: null, lane_number: null } : t
+        )
+      )
     }
-    setCells(newCells)
-    setPairsModal(false)
-    setPendingPairs([{ driver_id: '', crew_id: '' }])
-    setCreatingPairs(false)
   }
 
-  // ── Edit modal (boat / patient / notes) ──
-  function openEdit(wave: number, lane: number) {
-    if (!isTrainer) return
-    const key = `${wave}-${lane}`
-    setEditData({ ...(cells[key] ?? EMPTY_CELL) })
-    setEditModal({ wave, lane })
-  }
+  async function handleGridSlotClick(wave: number, lane: number) {
+    if (!isTrainer || !selectedTeamId) return
+    const occupied = gridMap.get(`${wave}-${lane}`)
+    const sel = teams.find(t => t.id === selectedTeamId)
+    if (!sel) return
 
-  async function saveEditModal() {
-    if (!editModal || !editData) return
-    const { wave, lane } = editModal
-    const key = `${wave}-${lane}`
-    setCells(prev => ({ ...prev, [key]: { ...editData } }))
-    await performSave(key, wave, lane, editData)
-    setEditModal(null)
-    setEditData(null)
-  }
-
-  async function deleteEditModal() {
-    if (!editModal || !editData) return
-    const { wave, lane } = editModal
-    const key = `${wave}-${lane}`
-    if (editData.dbId) {
-      await supabase.from('irb_session_teams').delete().eq('id', editData.dbId)
+    if (!occupied) {
+      // Place selected team in empty slot
+      await supabase.from('irb_session_teams').update({ wave_number: wave, lane_number: lane }).eq('id', selectedTeamId)
+      setTeams(prev => prev.map(t => t.id === selectedTeamId ? { ...t, wave_number: wave, lane_number: lane } : t))
+    } else if (occupied.id !== selectedTeamId) {
+      // Swap: move selected to this slot, occupied to selected's old slot
+      const oldWave = sel.wave_number
+      const oldLane = sel.lane_number
+      await Promise.all([
+        supabase.from('irb_session_teams').update({ wave_number: wave, lane_number: lane }).eq('id', selectedTeamId),
+        supabase.from('irb_session_teams').update({ wave_number: oldWave, lane_number: oldLane }).eq('id', occupied.id),
+      ])
+      setTeams(prev =>
+        prev.map(t => {
+          if (t.id === selectedTeamId) return { ...t, wave_number: wave, lane_number: lane }
+          if (t.id === occupied.id) return { ...t, wave_number: oldWave, lane_number: oldLane }
+          return t
+        })
+      )
     }
-    setCells(prev => {
-      const next = { ...prev }
-      delete next[key]
-      return next
-    })
-    setEditModal(null)
-    setEditData(null)
+    setSelectedTeamId(null)
   }
 
-  // ── Share ──
+  async function removeTeam(teamId: string) {
+    await supabase.from('irb_session_teams').delete().eq('id', teamId)
+    setTeams(prev => prev.filter(t => t.id !== teamId))
+    if (selectedTeamId === teamId) setSelectedTeamId(null)
+  }
+
+  async function addSolo(memberId: string) {
+    const isDriver = driverIds.has(memberId)
+    const isCrew = crewIds.has(memberId)
+    const payload = {
+      club_id: clubId, session_id: sessionId,
+      driver_id: isDriver ? memberId : (!isCrew ? memberId : null),
+      crew_id: isCrew && !isDriver ? memberId : null,
+      wave_number: null, lane_number: null,
+      boat_id: null, patient_id: null, notes: null,
+    }
+    const { data } = await supabase.from('irb_session_teams').insert(payload).select('id, driver_id, crew_id, wave_number, lane_number').single()
+    if (data) setTeams(prev => [...prev, { id: data.id, driver_id: data.driver_id ?? '', crew_id: data.crew_id ?? '', wave_number: null, lane_number: null }])
+    setPairTarget(null)
+  }
+
+  async function pairMembers(targetId: string, withId: string, targetRole: 'driver' | 'crew') {
+    const driver_id = targetRole === 'driver' ? targetId : withId
+    const crew_id = targetRole === 'crew' ? targetId : withId
+    const payload = {
+      club_id: clubId, session_id: sessionId,
+      driver_id: driver_id || null, crew_id: crew_id || null,
+      wave_number: null, lane_number: null,
+      boat_id: null, patient_id: null, notes: null,
+    }
+    const { data } = await supabase.from('irb_session_teams').insert(payload).select('id, driver_id, crew_id, wave_number, lane_number').single()
+    if (data) setTeams(prev => [...prev, { id: data.id, driver_id: data.driver_id ?? '', crew_id: data.crew_id ?? '', wave_number: null, lane_number: null }])
+    setPairTarget(null)
+  }
+
   async function shareDraw() {
-    const lines: string[] = [`${clubName} — ${sessionTitle}`, formatDateForPrint(sessionDate), '']
-    for (let w = 1; w <= numWaves; w++) {
+    if (!drawConfig) return
+    const lines: string[] = [`${clubName} — ${sessionTitle}`, formatDate(sessionDate), '']
+    for (let w = 1; w <= drawConfig.waves_count; w++) {
       lines.push(`Wave ${w}:`)
-      for (let l = 1; l <= numLanes; l++) {
-        const cell = cells[`${w}-${l}`]
-        const dName = cell?.driver_id ? (allMembers.find(m => m.id === cell.driver_id)?.name ?? '—') : null
-        const cName = cell?.crew_id ? (allMembers.find(m => m.id === cell.crew_id)?.name ?? '—') : null
+      for (let l = 1; l <= drawConfig.lanes_count; l++) {
+        const t = gridMap.get(`${w}-${l}`)
+        const dName = t?.driver_id ? memberName(t.driver_id, allMembers) : null
+        const cName = t?.crew_id ? memberName(t.crew_id, allMembers) : null
         const parts = [dName, cName].filter(Boolean).join(' + ')
         lines.push(`  L${l}: ${parts || '—'}`)
       }
@@ -496,655 +394,430 @@ export function WaveTeamDraw({
     setTimeout(() => setShareToast(false), 2500)
   }
 
-  if (loadingData) {
-    return <div className="p-8 text-center text-gray-400 text-sm">Loading draw data…</div>
-  }
-
-  const teamCount = Object.values(cells).filter(c => c.driver_id || c.crew_id).length
-  const [autoW, autoL] = findBestPreset(teamCount)
-
-  // Which member IDs are already assigned as driver or crew
-  const assignedDriverIds = new Set(Object.values(cells).map(c => c.driver_id).filter(Boolean))
-  const assignedCrewIds = new Set(Object.values(cells).map(c => c.crew_id).filter(Boolean))
+  if (loading) return <div className="p-8 text-center text-slate-400 text-sm">Loading draw…</div>
 
   return (
     <>
-      {/* ── Screen UI ── */}
-      <div className="print:hidden space-y-7">
+      <div className="space-y-6">
 
-        {/* Header bar */}
+        {/* ── Stats bar ── */}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-5">
-            <div className="text-sm text-gray-500">
-              <span className="text-2xl font-bold text-gray-900 leading-none">{allAttending.length}</span>
-              <span className="ml-1.5">attending</span>
+          <div className="flex items-center gap-4">
+            <div className="text-sm text-slate-500">
+              <span className="text-2xl font-bold text-slate-900 leading-none">{allAttending.length}</span>
+              <span className="ml-1">attending</span>
             </div>
-            <div className="w-px h-6 bg-gray-200" />
-            <div className="text-sm text-gray-500">
-              <span className="text-2xl font-bold text-gray-900 leading-none">{teamCount}</span>
-              <span className="ml-1.5">teams</span>
+            <div className="w-px h-5 bg-slate-200" />
+            <div className="text-sm text-slate-500">
+              <span className="text-2xl font-bold text-slate-900 leading-none">{teamCount}</span>
+              <span className="ml-1">teams</span>
             </div>
+            {unpartnered.length > 0 && (
+              <>
+                <div className="w-px h-5 bg-slate-200" />
+                <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-50 border border-amber-200 rounded-full text-xs font-semibold text-amber-700">
+                  <AlertTriangle size={12} />
+                  {unpartnered.length} unpartnered
+                </div>
+              </>
+            )}
           </div>
+
           <div className="flex items-center gap-2 relative">
-            <button
-              onClick={shareDraw}
-              className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
-            >
-              <Copy size={14} />
-              Share
-            </button>
+            {drawConfig && (
+              <button
+                onClick={shareDraw}
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-slate-200 text-slate-600 rounded-lg text-sm font-medium hover:bg-slate-50 transition"
+              >
+                <Copy size={13} />
+                Share
+              </button>
+            )}
             {shareToast && (
-              <span className="absolute right-0 -bottom-9 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 whitespace-nowrap shadow-sm">
+              <span className="absolute right-0 -bottom-9 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2.5 py-1.5 whitespace-nowrap shadow-sm z-10">
                 Copied to clipboard!
               </span>
             )}
-            <button
-              onClick={() => window.print()}
-              className="hidden sm:flex items-center gap-1.5 px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
-            >
-              <Printer size={14} />
-              Print
-            </button>
             {isTrainer && (
               <button
-                onClick={clearDraw}
+                onClick={clearAll}
                 disabled={clearing}
-                className="flex items-center gap-1.5 px-3 py-2 border border-red-200 text-red-500 rounded-lg text-sm font-medium hover:bg-red-50 transition disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 border border-red-200 text-red-500 rounded-lg text-sm font-medium hover:bg-red-50 transition disabled:opacity-50"
               >
-                <Trash2 size={14} />
+                <Trash2 size={13} />
                 Clear
               </button>
             )}
           </div>
         </div>
 
-        {/* ── STEP 1: Set Capacity ── */}
+        {/* ── Build Teams ── */}
         {isTrainer && (
           <div>
-            <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-              Step 1 — Set Capacity
-            </h3>
-            <div className="flex flex-wrap items-end gap-3 mb-4">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Waves (1–{MAX_W})</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_W}
-                  value={waveInput}
-                  onChange={e => setWaveInput(e.target.value)}
-                  onBlur={() => {
-                    const v = Math.max(1, Math.min(MAX_W, parseInt(waveInput) || 1))
-                    setWaveInput(String(v))
-                  }}
-                  className="w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">Lanes per wave (1–{MAX_L})</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_L}
-                  value={laneInput}
-                  onChange={e => setLaneInput(e.target.value)}
-                  onBlur={() => {
-                    const v = Math.max(1, Math.min(MAX_L, parseInt(laneInput) || 1))
-                    setLaneInput(String(v))
-                  }}
-                  className="w-24 px-3 py-2 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
-              </div>
+            <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">Build Teams</h3>
+            <div className="flex flex-wrap gap-2">
               <button
-                onClick={applyCapacity}
-                className="flex items-center gap-2 px-5 py-2 bg-[#1e3a5f] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition"
+                onClick={buildConfirmedPairs}
+                disabled={building || partners.length === 0}
+                className="flex items-center gap-2 px-4 py-2 border-2 border-slate-300 text-slate-700 rounded-xl text-sm font-semibold hover:border-slate-400 hover:bg-slate-50 transition disabled:opacity-50"
+                title={partners.length === 0 ? 'No saved partner pairs — add pairs in Settings' : undefined}
               >
-                Set Capacity
+                <Users size={14} />
+                Confirmed pairs
+              </button>
+              <button
+                onClick={buildAutoPair}
+                disabled={building || allAttending.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-xl text-sm font-semibold hover:bg-slate-800 transition disabled:opacity-50"
+              >
+                <Zap size={14} />
+                {building ? 'Building…' : 'Auto-pair'}
               </button>
             </div>
+            {allAttending.length === 0 && (
+              <p className="mt-2 text-xs text-slate-400">Mark attendance first — build teams uses irb_attendance records.</p>
+            )}
+          </div>
+        )}
 
-            {/* Wave configuration presets */}
+        {/* ── Unpartnered ── */}
+        {unpartnered.length > 0 && isTrainer && (
+          <div>
+            <h3 className="text-[11px] font-semibold text-amber-600 uppercase tracking-widest mb-3">
+              Unpartnered ({unpartnered.length})
+            </h3>
             <div className="flex flex-wrap gap-2">
-              {PRESETS.map(([w, l]) => {
-                const slots = w * l
-                const empty = slots - teamCount
-                const isSelected = numWaves === w && numLanes === l
-                const isBestFit = autoW === w && autoL === l && !isSelected
-
-                let subLabel: string
-                let subColor: string
-                if (empty === 0) {
-                  subLabel = 'perfect fit'
-                  subColor = isSelected ? 'text-blue-200' : 'text-emerald-600 font-semibold'
-                } else if (empty > 0) {
-                  subLabel = `${slots} slots · ${empty} empty`
-                  subColor = isSelected ? 'text-blue-200' : 'text-gray-400'
-                } else {
-                  subLabel = `${slots} slots · ${-empty} over`
-                  subColor = isSelected ? 'text-red-200' : 'text-red-400'
-                }
-
-                return (
+              {unpartnered.map(m => (
+                <div key={m.id} className="flex items-center gap-1 pl-3 pr-1 py-1 bg-amber-50 border border-amber-200 rounded-full text-sm">
+                  <span className="font-medium text-slate-800">{m.firstName}</span>
                   <button
-                    key={`${w}-${l}`}
                     onClick={() => {
-                      setNumWaves(w)
-                      setNumLanes(l)
-                      setWaveInput(String(w))
-                      setLaneInput(String(l))
+                      setPairTarget(m.id)
+                      setPairWith('')
+                      setPairRole(driverIds.has(m.id) ? 'driver' : 'crew')
                     }}
-                    className={`relative px-3 py-2 rounded-xl border-2 text-left transition ${
-                      isSelected
-                        ? 'bg-[#1e3a5f] border-[#1e3a5f] text-white'
-                        : 'border-gray-200 text-gray-700 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
+                    className="px-2 py-0.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 rounded-full transition"
                   >
-                    <div className="text-xs font-semibold leading-snug whitespace-nowrap">
-                      {w}×{l}
-                    </div>
-                    <div className={`text-[10px] mt-0.5 whitespace-nowrap ${subColor}`}>
-                      {subLabel}
-                    </div>
-                    {isBestFit && (
-                      <span className="absolute -top-1.5 -right-1.5 text-[8px] font-bold text-emerald-700 bg-emerald-100 rounded px-1 py-0.5 leading-none border border-emerald-200">
-                        best
-                      </span>
-                    )}
+                    Pair…
                   </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── Wave Configuration ── (only when teams exist) */}
+        {isTrainer && teamCount > 0 && (
+          <div>
+            <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">
+              Wave Configuration
+            </h3>
+            {waveOptions.length === 0 ? (
+              <p className="text-xs text-slate-400">No valid configurations — add more teams first.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {waveOptions.map(({ waves, lanes, slots }) => {
+                  const empty = slots - teamCount
+                  const isSelected = drawConfig?.waves_count === waves && drawConfig?.lanes_count === lanes
+                  return (
+                    <button
+                      key={`${waves}-${lanes}`}
+                      onClick={() => selectConfig(waves, lanes)}
+                      className={`relative px-3 py-2 rounded-xl border-2 text-left transition ${
+                        isSelected
+                          ? 'bg-[#1e3a5f] border-[#1e3a5f] text-white'
+                          : 'border-slate-200 text-slate-700 hover:border-slate-300 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="text-xs font-semibold whitespace-nowrap">
+                        {waves} waves × {lanes} lanes
+                      </div>
+                      <div className={`text-[10px] mt-0.5 whitespace-nowrap ${
+                        isSelected
+                          ? 'text-blue-200'
+                          : empty === 0
+                          ? 'text-emerald-600 font-semibold'
+                          : 'text-slate-400'
+                      }`}>
+                        {empty === 0 ? 'perfect fit' : `${slots} slots · ${empty} empty`}
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Wave Grid ── (only when config selected) */}
+        {drawConfig && (
+          <div>
+            <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">
+              Wave Draw
+              {!isTrainer && (
+                <span className="ml-2 inline-flex items-center gap-1 text-slate-400 normal-case tracking-normal font-normal text-xs">
+                  <Lock size={10} />
+                  view only
+                </span>
+              )}
+            </h3>
+
+            {/* Selected team hint bar */}
+            {isTrainer && selectedTeam && (
+              <div className="mb-3 flex items-center gap-2 px-3 py-2 bg-[#E63329]/10 border border-[#E63329]/30 rounded-xl text-sm">
+                <span className="font-semibold text-[#E63329]">
+                  {[
+                    selectedTeam.driver_id && memberFirst(selectedTeam.driver_id, allMembers),
+                    selectedTeam.crew_id && memberFirst(selectedTeam.crew_id, allMembers),
+                  ]
+                    .filter(Boolean)
+                    .join(' + ')}
+                </span>
+                <span className="text-slate-500 text-xs">selected — tap a slot to place</span>
+                <button
+                  onClick={() => setSelectedTeamId(null)}
+                  className="ml-auto text-xs text-slate-400 hover:text-slate-600 underline"
+                >
+                  Deselect
+                </button>
+              </div>
+            )}
+
+            <div className="space-y-5">
+              {Array.from({ length: drawConfig.waves_count }, (_, wi) => {
+                const wave = wi + 1
+                return (
+                  <div key={wave}>
+                    <div className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-2">
+                      Wave {wave}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {Array.from({ length: drawConfig.lanes_count }, (_, li) => {
+                        const lane = li + 1
+                        const team = gridMap.get(`${wave}-${lane}`)
+                        const isSelectedHere = team != null && selectedTeamId === team.id
+                        const hasSelection = selectedTeamId != null
+
+                        return (
+                          <button
+                            key={lane}
+                            onClick={() => {
+                              if (!isTrainer) return
+                              if (team && selectedTeamId === team.id) {
+                                // Clicking the selected team's slot deselects it
+                                setSelectedTeamId(null)
+                              } else if (team && !hasSelection) {
+                                // Click placed team with no selection → select it to move
+                                setSelectedTeamId(team.id)
+                              } else {
+                                // Place or swap
+                                handleGridSlotClick(wave, lane)
+                              }
+                            }}
+                            className={`flex flex-col items-start min-w-[88px] px-3 py-2.5 rounded-xl border-2 transition text-left ${
+                              isSelectedHere
+                                ? 'bg-[#E63329] border-[#E63329] text-white'
+                                : team
+                                ? hasSelection
+                                  ? 'bg-white border-slate-300 hover:border-[#E63329] text-slate-800 cursor-pointer'
+                                  : 'bg-white border-slate-200 text-slate-800 cursor-pointer'
+                                : hasSelection
+                                ? 'bg-slate-50 border-dashed border-[#1e3a5f]/40 hover:border-[#1e3a5f] hover:bg-slate-100 cursor-pointer'
+                                : 'bg-slate-50 border-dashed border-slate-200 cursor-default'
+                            }`}
+                          >
+                            <div className="text-[10px] font-bold text-slate-400 mb-1">L{lane}</div>
+                            {team ? (
+                              <div className="text-xs font-semibold leading-snug">
+                                {team.driver_id && (
+                                  <div className={isSelectedHere ? 'text-white' : 'text-slate-900'}>
+                                    {memberFirst(team.driver_id, allMembers)}
+                                  </div>
+                                )}
+                                {team.crew_id && (
+                                  <div className={isSelectedHere ? 'text-white/80' : 'text-slate-500'}>
+                                    {memberFirst(team.crew_id, allMembers)}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <div className="text-xs text-slate-300">—</div>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
                 )
               })}
             </div>
           </div>
         )}
 
-        {/* ── STEP 2: Available Members ── */}
-        <div>
-          <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-            Step 2 — Available Members
-          </h3>
-          {allAttending.length === 0 ? (
-            <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-4 border border-dashed border-gray-200">
-              No members marked as attended yet. Mark attendance in the Attendance tab first.
-            </p>
-          ) : (
-            <div className="grid grid-cols-2 gap-4">
-              {/* Drivers column */}
-              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                <div className="text-xs font-semibold text-gray-500 mb-2">
-                  Drivers (IRB-D) — {drivers.length}
-                </div>
-                {drivers.length === 0 ? (
-                  <p className="text-xs text-gray-400">None present with IRB-D</p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {drivers.map(m => {
-                      const assigned = assignedDriverIds.has(m.id)
-                      return (
-                        <span
-                          key={m.id}
-                          title={m.name}
-                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border transition ${
-                            assigned
-                              ? 'bg-gray-100 text-gray-300 border-gray-200 line-through'
-                              : 'bg-white text-blue-700 border-blue-200 shadow-sm'
-                          }`}
-                        >
-                          {memberFirstName(m)}
-                        </span>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Crew column */}
-              <div className="bg-gray-50 rounded-xl p-3 border border-gray-200">
-                <div className="text-xs font-semibold text-gray-500 mb-2">
-                  Crew (IRB-C) — {crews.length}
-                </div>
-                {crews.length === 0 ? (
-                  <p className="text-xs text-gray-400">None present with IRB-C</p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {crews.map(m => {
-                      const assigned = assignedCrewIds.has(m.id)
-                      return (
-                        <span
-                          key={m.id}
-                          title={m.name}
-                          className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium border transition ${
-                            assigned
-                              ? 'bg-gray-100 text-gray-300 border-gray-200 line-through'
-                              : 'bg-white text-emerald-700 border-emerald-200 shadow-sm'
-                          }`}
-                        >
-                          {memberFirstName(m)}
-                        </span>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* ── Build teams ── */}
-        {isTrainer && (
+        {/* ── Bench (unplaced teams) ── */}
+        {benchTeams.length > 0 && (
           <div>
-            <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-              Build Teams
+            <h3 className="text-[11px] font-semibold text-slate-400 uppercase tracking-widest mb-3">
+              Bench ({benchTeams.length})
+              {drawConfig && isTrainer && (
+                <span className="ml-1.5 font-normal normal-case tracking-normal text-slate-400">
+                  — tap a team, then tap a grid slot to place it
+                </span>
+              )}
             </h3>
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setPendingPairs([{ driver_id: '', crew_id: '' }])
-                  setPairsModal(true)
-                }}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 border-2 border-gray-300 text-gray-700 rounded-xl text-sm font-semibold hover:border-gray-400 hover:bg-gray-50 transition"
-              >
-                <Users size={15} />
-                Confirmed pairs
-              </button>
-              <button
-                onClick={autoPair}
-                disabled={autopairing || allAttending.length === 0}
-                className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-5 py-2.5 bg-gray-900 text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition disabled:opacity-60"
-              >
-                <Zap size={15} />
-                {autopairing ? 'Pairing…' : 'Auto-pair'}
-              </button>
+            <div className="flex flex-wrap gap-2">
+              {benchTeams.map(t => {
+                const isSelected = selectedTeamId === t.id
+                const label = [
+                  t.driver_id && memberFirst(t.driver_id, allMembers),
+                  t.crew_id && memberFirst(t.crew_id, allMembers),
+                ]
+                  .filter(Boolean)
+                  .join(' + ')
+                return (
+                  <div
+                    key={t.id}
+                    className={`flex items-center gap-1 pl-3 pr-1 py-1.5 rounded-full border-2 transition ${
+                      isTrainer ? 'cursor-pointer' : ''
+                    } ${
+                      isSelected
+                        ? 'bg-[#E63329] border-[#E63329] text-white'
+                        : 'bg-white border-slate-200 text-slate-800 hover:border-slate-300'
+                    }`}
+                    onClick={() => isTrainer && setSelectedTeamId(isSelected ? null : t.id)}
+                  >
+                    <span className="text-sm font-semibold">{label || '(empty)'}</span>
+                    {isTrainer && (
+                      <button
+                        onClick={e => { e.stopPropagation(); removeTeam(t.id) }}
+                        className={`ml-1 p-1 rounded-full transition ${
+                          isSelected
+                            ? 'hover:bg-white/20 text-white'
+                            : 'text-slate-400 hover:text-red-400 hover:bg-slate-100'
+                        }`}
+                      >
+                        <X size={12} />
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
-            {allAttending.length === 0 && (
-              <p className="mt-2 text-xs text-gray-400">
-                Mark attendance first — auto-pair uses irb_attendance records.
-              </p>
-            )}
           </div>
         )}
 
-        {/* ── STEP 3: Wave Grid ── */}
-        <div>
-          <h3 className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest mb-3">
-            Step 3 — Wave Grid
-          </h3>
-          <div className="space-y-6">
-            {Array.from({ length: numWaves }, (_, wi) => {
-              const wave = wi + 1
-              return (
-                <div key={wave}>
-                  <div className="text-xs font-bold text-blue-600 uppercase tracking-widest mb-2">
-                    Wave {wave}
-                  </div>
-                  <div className="space-y-2">
-                    {Array.from({ length: numLanes }, (_, li) => {
-                      const lane = li + 1
-                      const key = `${wave}-${lane}`
-                      const cell = cells[key]
-                      const isSaved = savedKeys.has(key)
-
-                      return (
-                        <div
-                          key={key}
-                          className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-white"
-                        >
-                          <span className="text-xs font-bold text-gray-400 w-6 flex-shrink-0 tabular-nums">
-                            L{lane}
-                          </span>
-
-                          {/* Driver select */}
-                          <div className="flex-1 min-w-0">
-                            <div className="text-[9px] font-semibold text-gray-400 uppercase mb-0.5">Driver</div>
-                            {isTrainer ? (
-                              <select
-                                value={cell?.driver_id ?? ''}
-                                onChange={e => assignSlotField(wave, lane, 'driver_id', e.target.value)}
-                                className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-gray-900"
-                              >
-                                <option value="">+ Driver</option>
-                                {drivers.map(m => (
-                                  <option key={m.id} value={m.id}>{m.name}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <span className={`text-sm ${cell?.driver_id ? 'text-gray-900 font-medium' : 'text-gray-300'}`}>
-                                {cell?.driver_id
-                                  ? (allMembers.find(m => m.id === cell.driver_id)?.name ?? '—')
-                                  : '—'}
-                              </span>
-                            )}
-                          </div>
-
-                          <div className="w-px h-8 bg-gray-100 flex-shrink-0" />
-
-                          {/* Crew select */}
-                          <div className="flex-1 min-w-0">
-                            <div className="text-[9px] font-semibold text-gray-400 uppercase mb-0.5">Crew</div>
-                            {isTrainer ? (
-                              <select
-                                value={cell?.crew_id ?? ''}
-                                onChange={e => assignSlotField(wave, lane, 'crew_id', e.target.value)}
-                                className="w-full px-2 py-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 text-gray-900"
-                              >
-                                <option value="">+ Crew</option>
-                                {crews.map(m => (
-                                  <option key={m.id} value={m.id}>{m.name}</option>
-                                ))}
-                              </select>
-                            ) : (
-                              <span className={`text-sm ${cell?.crew_id ? 'text-gray-900 font-medium' : 'text-gray-300'}`}>
-                                {cell?.crew_id
-                                  ? (allMembers.find(m => m.id === cell.crew_id)?.name ?? '—')
-                                  : '—'}
-                              </span>
-                            )}
-                          </div>
-
-                          {/* Saved indicator + details button */}
-                          <div className="flex items-center gap-1.5 flex-shrink-0">
-                            {isSaved && (
-                              <span className="text-[10px] font-semibold text-emerald-500">✓</span>
-                            )}
-                            {isTrainer && (
-                              <button
-                                onClick={() => openEdit(wave, lane)}
-                                title="Edit boat / patient / notes"
-                                className="p-1.5 text-gray-300 hover:text-gray-500 rounded-lg hover:bg-gray-100 transition"
-                              >
-                                <Settings2 size={13} />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Mobile print button */}
-        <div className="sm:hidden pt-1">
-          <button
-            onClick={() => window.print()}
-            className="flex items-center gap-1.5 px-3 py-2 border border-gray-200 text-gray-600 rounded-lg text-sm font-medium hover:bg-gray-50 transition"
-          >
-            <Printer size={14} />
-            Print Draw
-          </button>
-        </div>
+        {/* ── Empty states ── */}
+        {teamCount === 0 && allAttending.length === 0 && (
+          <p className="text-sm text-slate-400 bg-slate-50 rounded-xl p-4 border border-dashed border-slate-200">
+            No members marked as attended yet. Mark attendance in the Attendance tab first.
+          </p>
+        )}
+        {teamCount === 0 && allAttending.length > 0 && isTrainer && (
+          <p className="text-sm text-slate-400 bg-slate-50 rounded-xl p-4 border border-dashed border-slate-200">
+            Use "Confirmed pairs" or "Auto-pair" above to build teams from the {allAttending.length} attending members.
+          </p>
+        )}
+        {teamCount === 0 && allAttending.length > 0 && !isTrainer && (
+          <p className="text-sm text-slate-400 bg-slate-50 rounded-xl p-4 border border-dashed border-slate-200">
+            No wave draw has been created for this session yet.
+          </p>
+        )}
       </div>
 
-      {/* ── Edit modal (boat / patient / notes) ── */}
-      {editModal && editData && (
+      {/* ── Pair dialog ── */}
+      {pairTarget && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/40">
-          <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
+          <div className="bg-white w-full sm:max-w-sm sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
               <div>
-                <div className="text-[11px] font-semibold text-gray-400 uppercase tracking-widest">
-                  Edit Team — Extra Details
+                <div className="font-bold text-slate-900">
+                  Pair {allMembers.find(m => m.id === pairTarget)?.firstName}
                 </div>
-                <div className="text-base font-bold text-gray-900 mt-0.5">
-                  Wave {editModal.wave} · Lane {editModal.lane}
-                </div>
+                <div className="text-xs text-slate-400 mt-0.5">Choose a partner or add solo</div>
               </div>
               <button
-                onClick={() => { setEditModal(null); setEditData(null) }}
-                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition"
+                onClick={() => setPairTarget(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
               >
                 <X size={20} />
               </button>
             </div>
 
-            <div className="p-5 space-y-4 overflow-y-auto max-h-[65vh]">
+            <div className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">
-                  Driver (IRB-D)
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+                  This member's role
+                </label>
+                <div className="flex gap-2">
+                  {(['driver', 'crew'] as const).map(r => (
+                    <button
+                      key={r}
+                      onClick={() => setPairRole(r)}
+                      className={`flex-1 py-2 rounded-xl border-2 text-sm font-semibold transition ${
+                        pairRole === r
+                          ? 'bg-[#1e3a5f] border-[#1e3a5f] text-white'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {r === 'driver' ? 'Driver (IRB-D)' : 'Crew (IRB-C)'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-500 mb-1.5">
+                  Pair with
                 </label>
                 <select
-                  value={editData.driver_id}
-                  onChange={e => setEditData(d => d ? { ...d, driver_id: e.target.value } : d)}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+                  value={pairWith}
+                  onChange={e => setPairWith(e.target.value)}
+                  className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
                 >
-                  <option value="">— Select driver —</option>
-                  {drivers.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
+                  <option value="">— choose partner —</option>
+                  <optgroup label="Unpartnered">
+                    {allAttending
+                      .filter(m => m.id !== pairTarget && !membersInTeams.has(m.id))
+                      .map(m => (
+                        <option key={m.id} value={m.id}>{m.name}</option>
+                      ))}
+                  </optgroup>
+                  <optgroup label="Already in a team (going twice)">
+                    {allAttending
+                      .filter(m => m.id !== pairTarget && membersInTeams.has(m.id))
+                      .map(m => (
+                        <option key={m.id} value={m.id}>{m.name} ★</option>
+                      ))}
+                  </optgroup>
                 </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">
-                  Crew (IRB-C)
-                </label>
-                <select
-                  value={editData.crew_id}
-                  onChange={e => setEditData(d => d ? { ...d, crew_id: e.target.value } : d)}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                >
-                  <option value="">— Select crew —</option>
-                  {crews.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">
-                  Patient (optional)
-                </label>
-                <select
-                  value={editData.patient_id}
-                  onChange={e => setEditData(d => d ? { ...d, patient_id: e.target.value } : d)}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                >
-                  <option value="">— None —</option>
-                  {allAttending.map(m => (
-                    <option key={m.id} value={m.id}>{m.name}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Boat</label>
-                <select
-                  value={editData.boat_id}
-                  onChange={e => setEditData(d => d ? { ...d, boat_id: e.target.value } : d)}
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                >
-                  <option value="">— No boat assigned —</option>
-                  {boats.map(b => (
-                    <option key={b.id} value={b.id}>{boatLabel(b)}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-gray-500 mb-1.5">Notes</label>
-                <input
-                  type="text"
-                  value={editData.notes}
-                  onChange={e => setEditData(d => d ? { ...d, notes: e.target.value } : d)}
-                  placeholder="Team notes…"
-                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                />
               </div>
             </div>
 
-            <div className="px-5 py-4 border-t border-gray-100 flex items-center gap-3">
+            <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
               <button
-                onClick={deleteEditModal}
-                className="px-4 py-2.5 border border-red-200 text-red-500 rounded-xl text-sm font-semibold hover:bg-red-50 transition"
+                onClick={() => addSolo(pairTarget)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition"
               >
-                Delete
+                Add solo
               </button>
               <div className="flex-1" />
               <button
-                onClick={() => { setEditModal(null); setEditData(null) }}
-                className="px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 transition"
+                onClick={() => setPairTarget(null)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition"
               >
                 Cancel
               </button>
               <button
-                onClick={saveEditModal}
-                className="px-4 py-2.5 bg-[#1e3a5f] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition"
+                onClick={() => pairWith && pairMembers(pairTarget, pairWith, pairRole)}
+                disabled={!pairWith}
+                className="px-4 py-2 bg-[#1e3a5f] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
               >
-                Save
+                Pair
               </button>
             </div>
           </div>
         </div>
       )}
-
-      {/* ── Confirmed pairs modal ── */}
-      {pairsModal && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4 bg-black/40">
-          <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-2xl shadow-2xl overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
-              <div>
-                <div className="text-base font-bold text-gray-900">Confirmed Pairs</div>
-                <div className="text-xs text-gray-400 mt-0.5">Select driver + crew pairs to create teams</div>
-              </div>
-              <button
-                onClick={() => setPairsModal(false)}
-                className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-100 transition"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="p-5 space-y-3 overflow-y-auto max-h-[55vh]">
-              {pendingPairs.map((pair, idx) => (
-                <div key={idx} className="flex gap-2 items-start">
-                  <div className="flex-1 space-y-2">
-                    <select
-                      value={pair.driver_id}
-                      onChange={e => {
-                        const next = [...pendingPairs]
-                        next[idx] = { ...next[idx], driver_id: e.target.value }
-                        setPendingPairs(next)
-                      }}
-                      className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                    >
-                      <option value="">Driver (IRB-D) — select</option>
-                      {drivers.map(m => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                    <select
-                      value={pair.crew_id}
-                      onChange={e => {
-                        const next = [...pendingPairs]
-                        next[idx] = { ...next[idx], crew_id: e.target.value }
-                        setPendingPairs(next)
-                      }}
-                      className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                    >
-                      <option value="">Crew (IRB-C) — select</option>
-                      {crews.map(m => (
-                        <option key={m.id} value={m.id}>{m.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {pendingPairs.length > 1 && (
-                    <button
-                      onClick={() => setPendingPairs(prev => prev.filter((_, i) => i !== idx))}
-                      className="mt-1 p-2 text-gray-300 hover:text-red-400 rounded-lg transition"
-                    >
-                      <X size={16} />
-                    </button>
-                  )}
-                </div>
-              ))}
-
-              <button
-                onClick={() => setPendingPairs(prev => [...prev, { driver_id: '', crew_id: '' }])}
-                className="w-full py-2.5 border-2 border-dashed border-gray-200 text-gray-400 rounded-xl text-sm font-medium hover:border-gray-300 hover:text-gray-500 transition"
-              >
-                + Add another pair
-              </button>
-            </div>
-
-            <div className="px-5 py-4 border-t border-gray-100 flex gap-3 justify-end">
-              <button
-                onClick={() => setPairsModal(false)}
-                className="px-4 py-2.5 border border-gray-200 text-gray-600 rounded-xl text-sm font-semibold hover:bg-gray-50 transition"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={createConfirmedPairs}
-                disabled={creatingPairs || pendingPairs.every(p => !p.driver_id && !p.crew_id)}
-                className="px-4 py-2.5 bg-[#1e3a5f] text-white rounded-xl text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
-              >
-                {creatingPairs ? 'Creating…' : 'Create Teams'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Print view ── */}
-      <div className="hidden print:block print:fixed print:inset-0 print:bg-white print:p-6 print:z-[9999]">
-        <div style={{ marginBottom: 20 }}>
-          <div style={{ fontSize: 20, fontWeight: 700 }}>{clubName}</div>
-          <div style={{ fontSize: 13, color: '#555', marginTop: 4 }}>
-            {sessionTitle} &middot; {formatDateForPrint(sessionDate)}
-          </div>
-        </div>
-
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
-          <thead>
-            <tr>
-              {(['Wave', 'Lane', 'Driver', 'Crew', 'Patient', 'Notes'] as const).map(h => (
-                <th
-                  key={h}
-                  style={{
-                    border: '1px solid #000',
-                    padding: '6px 8px',
-                    textAlign: 'left',
-                    background: '#f3f4f6',
-                    fontWeight: 700,
-                  }}
-                >
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {Array.from({ length: numWaves }, (_, wi) =>
-              Array.from({ length: numLanes }, (_, li) => {
-                const wave = wi + 1
-                const lane = li + 1
-                const cell = cells[`${wave}-${lane}`]
-                return (
-                  <tr key={`${wave}-${lane}`}>
-                    <td style={{ border: '1px solid #000', padding: '6px 8px', fontWeight: li === 0 ? 700 : 400, color: li === 0 ? '#000' : '#999' }}>
-                      {li === 0 ? `Wave ${wave}` : ''}
-                    </td>
-                    <td style={{ border: '1px solid #000', padding: '6px 8px' }}>L{lane}</td>
-                    <td style={{ border: '1px solid #000', padding: '6px 8px' }}>
-                      {cell?.driver_id ? (allMembers.find(m => m.id === cell.driver_id)?.name ?? '—') : '—'}
-                    </td>
-                    <td style={{ border: '1px solid #000', padding: '6px 8px' }}>
-                      {cell?.crew_id ? (allMembers.find(m => m.id === cell.crew_id)?.name ?? '—') : '—'}
-                    </td>
-                    <td style={{ border: '1px solid #000', padding: '6px 8px' }}>
-                      {cell?.patient_id ? (allMembers.find(m => m.id === cell.patient_id)?.name ?? '') : ''}
-                    </td>
-                    <td style={{ border: '1px solid #000', padding: '6px 8px', fontStyle: 'italic', color: '#555' }}>
-                      {cell?.notes ?? ''}
-                    </td>
-                  </tr>
-                )
-              })
-            )}
-          </tbody>
-        </table>
-      </div>
     </>
   )
 }
